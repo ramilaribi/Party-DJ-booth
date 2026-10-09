@@ -70,6 +70,11 @@ const els = {
   searchSections: document.querySelectorAll(".music-search"),
   stage: document.querySelector(".stage"),
   youtubeStage: document.querySelector("#youtube-stage"),
+  youtubeSlotA: document.querySelector("#youtube-slot-a"),
+  youtubeSlotB: document.querySelector("#youtube-slot-b"),
+  transitionSelect: document.querySelector("#transition-select"),
+  mixNextBtn: document.querySelector("#mix-next-btn"),
+  remoteTransition: document.querySelector("#remote-transition"),
   mixerPanel: document.querySelector(".mixer-panel"),
   mixModeTabs: document.querySelectorAll("[data-mix-mode]"),
   crossfader: document.querySelector("#crossfader"),
@@ -81,6 +86,7 @@ const els = {
 
 const settingsKey = "party-dj-booth-settings";
 const trackPrefsKey = "party-dj-booth-track-prefs";
+const recentSearchesKey = "party-dj-booth-recent-searches";
 const youtubeStates = { ended: 0, playing: 1, buffering: 3 };
 const searchSources = {
   archive: {
@@ -92,7 +98,7 @@ const searchSources = {
   },
   youtube: {
     endpoint: "/api/youtube/search",
-    hint: "Plays through YouTube's player on the booth. Nothing is downloaded.",
+    hint: "Search, or paste a YouTube playlist link to import it. Plays on the booth; nothing is downloaded.",
     searching: "Searching YouTube...",
     found: (count) => `${count} YouTube videos found. They play on the booth; nothing is downloaded.`,
     none: "No YouTube videos found. Try another song or artist.",
@@ -139,6 +145,7 @@ const booth = {
   volume: settings.volume ?? 100,
   mutedVolume: 0,
   mixMode: settings.mixMode === "manual" ? "manual" : "auto",
+  transition: settings.transition || "crossfade",
   beatMatch: settings.beatMatch ?? true,
   crossfader: 0,
   energy: settings.energy,
@@ -150,12 +157,10 @@ const booth = {
   history: [],
 };
 
-// Every deck has the same shape, so playback code doesn't care whether a track is an audio file
-// or a YouTube video. Two audio decks let local tracks overlap during a crossfade.
-const audioDecks = [createAudioDeck(els.deckA, "A"), createAudioDeck(els.deckB, "B")];
-const youtubeDeck = createYouTubeDeck();
-const allDecks = [...audioDecks, youtubeDeck];
-let activeDeck = audioDecks[0];
+// Two decks, A and B. Either can hold a file or a YouTube video, so every transition overlaps
+// the outgoing deck with the other one.
+const decks = [createDeck("A", els.deckA, els.youtubeSlotA), createDeck("B", els.deckB, els.youtubeSlotB)];
+let activeDeck = decks[0];
 
 function boot() {
   els.shell.dataset.role = isRemote ? "remote" : "display";
@@ -275,7 +280,7 @@ function setVolume(value) {
   booth.volume = clamp(value, 0, 100);
   els.volumeSlider.value = String(booth.volume);
   if (masterGain) masterGain.gain.setTargetAtTime(booth.volume / 100, audioContext.currentTime, 0.05);
-  youtubeDeck.refreshVolume();
+  decks.forEach((deck) => deck.refreshVolume());
   saveSettings();
   syncFromDisplay(true);
 }
@@ -322,32 +327,43 @@ function bindSearchControls() {
         });
         status.textContent = searchSources[tab.dataset.source].hint;
         results.replaceChildren();
+        renderRecentSearches(section);
       });
     });
+    renderRecentSearches(section);
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const query = input.value.trim();
       const sourceName = section.dataset.source;
       const source = searchSources[sourceName];
+      // A YouTube playlist link imports the playlist instead of searching for its text.
+      const playlistId = sourceName === "youtube" ? playlistIdFrom(query) : "";
 
       if (query.length < 2) {
         status.textContent = "Type at least two characters.";
         return;
       }
 
-      status.textContent = source.searching;
+      status.textContent = playlistId ? "Importing the YouTube playlist..." : source.searching;
       results.replaceChildren();
 
       try {
-        const response = await apiFetch(`${source.endpoint}?q=${encodeURIComponent(query)}`);
+        const url = playlistId
+          ? `/api/youtube/playlist?list=${encodeURIComponent(playlistId)}`
+          : `${source.endpoint}?q=${encodeURIComponent(query)}`;
+        const response = await apiFetch(url);
         const payload = await response.json();
 
         if (!response.ok) throw new Error(payload.error || "Search failed.");
         // The user switched source while this search was running.
         if (section.dataset.source !== sourceName) return;
 
-        status.textContent = payload.results.length ? source.found(payload.results.length) : source.none;
+        if (!playlistId) rememberSearch(sourceName, query);
+        renderRecentSearches(section);
+        status.textContent = !payload.results.length
+          ? source.none
+          : playlistId ? `${payload.results.length} playable videos in this playlist.` : source.found(payload.results.length);
         if (sourceName === "youtube") {
           renderYouTubeResults(section, payload.results);
         } else {
@@ -358,6 +374,44 @@ function bindSearchControls() {
       }
     });
   });
+}
+
+// The playlist ID from a YouTube playlist link (or a bare ID), or "" when it isn't one.
+function playlistIdFrom(text) {
+  const fromLink = /[?&]list=([A-Za-z0-9_-]{10,64})/.exec(text);
+  if (fromLink) return fromLink[1];
+  return /^(?:PL|OLAK5uy_|UU|FL)[A-Za-z0-9_-]{10,60}$/.test(text) ? text : "";
+}
+
+// Recent searches per source, kept on this device, so "Raï" or "The Weeknd" is one tap away.
+function rememberSearch(sourceName, query) {
+  const recent = readJson(recentSearchesKey, {});
+  const list = (recent[sourceName] || []).filter((item) => item.toLowerCase() !== query.toLowerCase());
+  recent[sourceName] = [query, ...list].slice(0, 6);
+  try {
+    writeJson(recentSearchesKey, recent);
+  } catch {
+    // Private windows can refuse storage; the chips just won't persist.
+  }
+}
+
+function renderRecentSearches(section) {
+  const container = section.querySelector(".search-recent");
+  const form = section.querySelector(".search-form");
+  const input = section.querySelector(".search-input");
+  const queries = readJson(recentSearchesKey, {})[section.dataset.source] || [];
+
+  container.replaceChildren(...queries.map((query) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "search-chip";
+    chip.textContent = query;
+    chip.addEventListener("click", () => {
+      input.value = query;
+      form.requestSubmit();
+    });
+    return chip;
+  }));
 }
 
 function bindRemoteControls() {
@@ -377,6 +431,10 @@ function bindRemoteControls() {
 
   els.remoteCrossfade.addEventListener("input", () => {
     sendCommand({ type: "setCrossfade", value: Number(els.remoteCrossfade.value) });
+  });
+
+  els.remoteTransition.addEventListener("change", () => {
+    sendCommand({ type: "setTransition", value: els.remoteTransition.value });
   });
 }
 
@@ -416,6 +474,7 @@ function handleRemoteCommand(command) {
   if (command.type === "hype") hypeMoment();
 
   if (command.type === "addYouTube") addYouTubeTrack(command.video, Boolean(command.playNow));
+  if (command.type === "addYouTubeList") addYouTubeList(command.videos);
   if (command.type === "voice") runVoiceCommand(command.text);
 
   if (command.type === "jumpTo") {
@@ -436,6 +495,7 @@ function handleRemoteCommand(command) {
   if (command.type === "setVolume") setVolume(command.value);
   if (command.type === "setEnergy") setEnergy(command.value);
   if (command.type === "setCrossfade") setCrossfade(command.value);
+  if (command.type === "setTransition") setTransition(command.value);
 }
 
 function bindVoiceControls() {
@@ -596,6 +656,9 @@ async function runVoiceCommand(text) {
   } else if (command.action === "mixMode") {
     setMixMode(command.value);
     result = booth.mixMode === command.value ? `${command.value === "manual" ? "Manual" : "Auto"} mix` : els.mixerStatus.textContent;
+  } else if (command.action === "transition") {
+    setTransition(command.value);
+    result = `transition: ${transitionNames[booth.transition]}`;
   } else if (command.action === "autoFade") {
     if (booth.mixMode === "manual") {
       result = (await autoFade()) ? "fading across" : els.mixerStatus.textContent;
@@ -729,9 +792,37 @@ function addDownloadedTrack(downloadedTrack, announce) {
 }
 
 function addYouTubeTrack(video, playNow) {
+  const index = queueYouTubeVideo(video);
+  if (index < 0) return;
+
+  booth.message = `Queued ${booth.tracks[index].title} from YouTube`;
+
+  if (playNow) {
+    cueTrack(index, true);
+  } else if (booth.currentIndex === -1) {
+    loadTrack(index, false, false);
+  }
+
+  renderDisplay();
+  syncFromDisplay(true);
+}
+
+// "Add all": queue a whole set of results or a playlist, then render once.
+function addYouTubeList(videos) {
+  const added = (Array.isArray(videos) ? videos.slice(0, 100) : []).map(queueYouTubeVideo).filter((index) => index >= 0);
+  if (!added.length) return;
+
+  booth.message = `Added ${added.length} songs from YouTube`;
+  if (booth.currentIndex === -1) loadTrack(added[0], false, false);
+  renderDisplay();
+  syncFromDisplay(true);
+}
+
+// Adds a YouTube video to the queue (or finds it already there) and returns its index, or -1.
+function queueYouTubeVideo(video) {
   // Phones send videos over the socket, so check the shape before trusting it.
   const videoId = String(video?.videoId || "");
-  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) return;
+  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) return -1;
 
   const key = `youtube:${videoId}`;
   let index = booth.tracks.findIndex((track) => track.key === key);
@@ -760,16 +851,7 @@ function addYouTubeTrack(video, playNow) {
     index = booth.tracks.length - 1;
   }
 
-  booth.message = `Queued ${booth.tracks[index].title} from YouTube`;
-
-  if (playNow) {
-    cueTrack(index, true);
-  } else if (booth.currentIndex === -1) {
-    loadTrack(index, false, false);
-  }
-
-  renderDisplay();
-  syncFromDisplay(true);
+  return index;
 }
 
 function isAudioFile(file) {
@@ -824,8 +906,10 @@ async function setupAudio() {
   analyser.smoothingTimeConstant = 0.78;
   analyserData = new Uint8Array(analyser.frequencyBinCount);
 
-  // Each audio deck is a mixer channel: 3-band EQ, then a sweep filter, then its fader.
-  audioDecks.forEach((deck) => {
+  // Each deck's file engine is a mixer channel: 3-band EQ, then a sweep filter, then its fader.
+  // An echo send taps in after the filter and skips the fader, so echoes keep ringing after
+  // the fader closes (the Echo out transition).
+  decks.forEach((deck) => {
     deck.source = audioContext.createMediaElementSource(deck.el);
     deck.eqNodes = {
       low: new BiquadFilterNode(audioContext, { type: "lowshelf", frequency: 200, gain: deck.eq.low }),
@@ -843,6 +927,14 @@ async function setupAudio() {
       .connect(deck.filter)
       .connect(deck.gain)
       .connect(analyser);
+
+    deck.echo = {
+      send: new GainNode(audioContext, { gain: 0 }),
+      delay: new DelayNode(audioContext, { maxDelayTime: 2, delayTime: 0.375 }),
+      feedback: new GainNode(audioContext, { gain: 0.55 }),
+    };
+    deck.filter.connect(deck.echo.send).connect(deck.echo.delay).connect(deck.echo.feedback).connect(deck.echo.delay);
+    deck.echo.delay.connect(analyser);
   });
 
   // Master volume sits after the analyser, so the visualizer keeps moving at low volume.
@@ -897,7 +989,7 @@ async function playActive() {
 }
 
 function pauseAll() {
-  allDecks.forEach((deck) => deck.pause());
+  decks.forEach((deck) => deck.pause());
   booth.playing = false;
   booth.message = "Paused";
 }
@@ -907,7 +999,7 @@ async function loadTrack(index, shouldPlay, useFade) {
 
   const track = booth.tracks[index];
   const currentDeck = activeDeck;
-  const nextDeck = deckFor(track);
+  const nextDeck = otherDeck(currentDeck);
   const canFade = useFade && shouldPlay && booth.playing && booth.crossfade > 0 && currentDeck.loaded;
   const previousIndex = booth.currentIndex;
 
@@ -917,13 +1009,15 @@ async function loadTrack(index, shouldPlay, useFade) {
   ensureBpm(track);
 
   if (!canFade) {
-    // Reuse the current deck when it plays this kind of track; otherwise switch decks.
-    const deck = currentDeck.kind === track.kind ? currentDeck : nextDeck;
-    allDecks.filter((other) => other !== deck && other.loaded).forEach((other) => other.stop());
+    // No transition: reuse the current deck (it switches engine if needed) and stop the other.
+    const deck = currentDeck;
+    decks.filter((other) => other !== deck && other.loaded).forEach((other) => other.stop());
     activeDeck = deck;
 
     try {
       await deck.load(track);
+      // Auto mix plays every song at its own tempo; Manual mix keeps the deck's tempo fader.
+      if (booth.mixMode === "auto") deck.setTempo(1);
       deck.setLevel(levelFor(deck));
       if (shouldPlay) await playActive();
       else deck.preview?.();
@@ -943,29 +1037,23 @@ async function loadTrack(index, shouldPlay, useFade) {
   let failed = false;
 
   try {
-    if (nextDeck === currentDeck) {
-      // One YouTube player can't overlap two videos, so fade out, switch, and fade back in.
-      await dipDeck(currentDeck, track, booth.crossfade);
-    } else {
-      // Freeze the outgoing deck's tempo (it may still be drifting back from the last mix).
-      window.clearInterval(currentDeck.tempoTimer);
-      await nextDeck.load(track);
-      nextDeck.setLevel(0);
-      const plan = booth.beatMatch ? beatMatchPlan(currentDeck, track) : null;
-      if (plan) {
-        nextDeck.setTempo(plan.rate);
-        nextDeck.currentTime = plan.startTime;
-      }
-      await nextDeck.play();
-      if (plan) wait(0.25).then(() => alignBeats(nextDeck, currentDeck, plan));
-      await fadeDecks(currentDeck, nextDeck, booth.crossfade);
-      currentDeck.stop();
-      activeDeck = nextDeck;
-      // After the mix, drift back to the song's own tempo slowly enough that nobody notices.
-      if (plan && plan.rate !== 1) easeTempo(nextDeck, 1, 8);
-    }
+    // Freeze the outgoing deck's tempo (it may still be drifting back from the last mix).
+    window.clearInterval(currentDeck.tempoTimer);
+    await nextDeck.load(track);
+    nextDeck.setLevel(0);
+    const plan = booth.beatMatch ? beatMatchPlan(currentDeck, track) : null;
+    nextDeck.setTempo(plan ? plan.rate : 1);
+    if (plan) nextDeck.currentTime = plan.startTime;
+    await nextDeck.play();
+    if (plan) wait(0.25).then(() => alignBeats(nextDeck, currentDeck, plan));
+    const style = await runTransition(currentDeck, nextDeck, booth.crossfade);
+    currentDeck.stop();
+    activeDeck = nextDeck;
+    // After the mix, drift back to the song's own tempo slowly enough that nobody notices.
+    if (plan && plan.rate !== 1) easeTempo(nextDeck, 1, 8);
     booth.playing = true;
     booth.message = `Now playing ${track.title}`;
+    mixerStatus(`Last transition: ${transitionNames[style]}${plan ? ", beat-matched" : ""}.`);
   } catch (error) {
     failed = true;
     booth.message = error?.boothMessage || "Could not crossfade this track";
@@ -992,11 +1080,8 @@ async function loadTrack(index, shouldPlay, useFade) {
     return;
   }
 
-  // Keep the music going: skip a video YouTube refused, and move on after a failed
-  // YouTube-to-YouTube switch, which leaves nothing playing.
-  if (failed && booth.playing && (track.unplayable || nextDeck === currentDeck)) {
-    nextTrack(activeDeck !== nextDeck);
-  }
+  // Keep the music going: the old deck is still playing, so crossfade past a video YouTube refused.
+  if (failed && booth.playing && track.unplayable) nextTrack(true);
 }
 
 // Cue and Play now are what someone asked for, so a running crossfade delays them instead of
@@ -1014,12 +1099,6 @@ function cueTrack(index, shouldPlay) {
     return;
   }
   loadTrack(index, shouldPlay, true);
-}
-
-function deckFor(track) {
-  if (track.kind === "youtube") return youtubeDeck;
-  // Use the audio deck that isn't playing, so a crossfade can overlap the two.
-  return audioDecks.find((deck) => deck !== activeDeck);
 }
 
 function fadeCurves() {
@@ -1053,18 +1132,176 @@ function fadeDecks(fromDeck, toDeck, seconds) {
   });
 }
 
-async function dipDeck(deck, track, seconds) {
-  const half = Math.max(0.2, seconds / 2);
-  const { fadeIn, fadeOut } = fadeCurves();
+// --- Transitions -----------------------------------------------------------------------------
 
-  deck.fade(fadeOut, half);
-  await wait(half);
-  await deck.load(track);
-  deck.setLevel(0);
-  await deck.play();
-  deck.fade(fadeIn, half);
-  await wait(half);
-  deck.setLevel(1);
+const transitionNames = {
+  crossfade: "Crossfade",
+  bassSwap: "Bass swap",
+  filter: "Filter sweep",
+  echo: "Echo out",
+  brake: "Brake",
+  cut: "Cut on the beat",
+  random: "Mix it up",
+};
+
+function setTransition(style) {
+  if (!transitionNames[style]) return;
+  booth.transition = style;
+  els.transitionSelect.value = style;
+  saveSettings();
+  syncFromDisplay(true);
+}
+
+// Runs one transition from `from` to `to` (already playing, silent) and returns its style. The
+// effects need the outgoing song's audio in Web Audio, so a YouTube song can only crossfade or cut.
+async function runTransition(from, to, seconds) {
+  const duration = Math.max(0.2, seconds);
+  const outIsFile = from.kind === "audio" && Boolean(from.gain);
+  const bothFiles = outIsFile && to.kind === "audio" && Boolean(to.gain);
+  const available = ["crossfade", "cut"];
+  if (outIsFile) available.push("filter", "echo", "brake");
+  if (bothFiles) available.push("bassSwap");
+
+  const style = booth.transition === "random"
+    ? available[Math.floor(Math.random() * available.length)]
+    : available.includes(booth.transition) ? booth.transition : "crossfade";
+
+  if (style === "cut") await cutOnBeat(from, to);
+  else if (style === "filter") await filterSweep(from, to, duration);
+  else if (style === "echo") await echoOut(from, to, duration);
+  else if (style === "brake") await brake(from, to);
+  else if (style === "bassSwap") await bassSwap(from, to, duration);
+  else await fadeDecks(from, to, duration);
+
+  return style;
+}
+
+// Cut: switch decks in one go, on the outgoing song's next beat when its tempo is known.
+async function cutOnBeat(from, to) {
+  const track = from.track;
+  if (from.kind === "audio" && track?.bpm && track.firstBeat !== undefined) {
+    const period = 60 / track.bpm;
+    const phase = beatPhase(from.currentTime, track.firstBeat, period);
+    await wait(((1 - phase) * period) / (from.rate || 1));
+  }
+  from.setLevel(0);
+  to.setLevel(1);
+}
+
+// Filter sweep: a high-pass rises through the outgoing song, draining its bass and body, while
+// the next song fades in underneath.
+async function filterSweep(from, to, duration) {
+  const now = audioContext.currentTime;
+  const cutoff = from.filter.frequency;
+  from.filter.type = "highpass";
+  cutoff.cancelScheduledValues(0);
+  cutoff.setValueAtTime(30, now);
+  cutoff.exponentialRampToValueAtTime(5000, now + duration);
+
+  const level = from.gain.gain;
+  level.cancelScheduledValues(0);
+  level.setValueAtTime(1, now);
+  level.setValueAtTime(1, now + duration * 0.6);
+  level.linearRampToValueAtTime(0, now + duration);
+  to.fade(fadeCurves().fadeIn, duration);
+
+  await wait(duration);
+  from.setLevel(0);
+  to.setLevel(1);
+  cutoff.cancelScheduledValues(0);
+  applyFilter(from.filter, from.filterValue);
+}
+
+// Echo out: the outgoing song feeds a tempo-synced echo for one beat, then drops out, leaving only
+// its echoes ringing while the next song comes in.
+async function echoOut(from, to, duration) {
+  const now = audioContext.currentTime;
+  const beat = from.track?.bpm ? 60 / (from.track.bpm * from.rate) : 0.5;
+  const pull = now + Math.min(beat, duration * 0.4);
+  const { send, delay, feedback } = from.echo;
+
+  delay.delayTime.setValueAtTime(Math.min(1.5, beat * 0.75), now);
+  feedback.gain.setValueAtTime(0.55, now);
+  for (const param of [send.gain, from.gain.gain]) {
+    param.cancelScheduledValues(0);
+    param.setValueAtTime(1, now);
+    param.setValueAtTime(1, pull);
+    param.linearRampToValueAtTime(0, pull + 0.05);
+  }
+  to.fade(fadeCurves().fadeIn, Math.max(0.5, duration * 0.5));
+
+  await wait(duration);
+  from.setLevel(0);
+  to.setLevel(1);
+  send.gain.cancelScheduledValues(0);
+  send.gain.value = 0;
+}
+
+// Brake: the outgoing song slows to a stop like a turntable losing power (pitch dropping with
+// it), then the next song drops in at full volume.
+function brake(from, to) {
+  const seconds = 1.4;
+  const startRate = from.rate;
+  const level = from.gain.gain;
+  const now = audioContext.currentTime;
+  level.cancelScheduledValues(0);
+  level.setValueAtTime(1, now);
+  level.setValueAtTime(1, now + seconds - 0.25);
+  level.linearRampToValueAtTime(0, now + seconds);
+  from.el.preservesPitch = false;
+  from.el.webkitPreservesPitch = false;
+
+  return new Promise((resolve) => {
+    const started = performance.now();
+    // Driven by elapsed time, so a throttled timer in a hidden window only makes it less smooth.
+    const timer = window.setInterval(() => {
+      const progress = Math.min(1, (performance.now() - started) / (seconds * 1000));
+      from.el.playbackRate = Math.max(0.25, startRate * (1 - progress) ** 1.5);
+      if (progress < 1) return;
+
+      window.clearInterval(timer);
+      from.setLevel(0);
+      from.pause();
+      from.setKeyLock(from.keyLock);
+      from.applyRate(startRate);
+      to.setLevel(1);
+      resolve();
+    }, 30);
+  });
+}
+
+// Bass swap: the next song rises with its bass cut; halfway through, the two basses swap so the
+// low end never doubles up, then the outgoing song fades away.
+async function bassSwap(from, to, duration) {
+  const now = audioContext.currentTime;
+  const middle = now + duration / 2;
+  const outLow = from.eqNodes.low.gain;
+  const inLow = to.eqNodes.low.gain;
+
+  inLow.cancelScheduledValues(0);
+  inLow.setValueAtTime(-26, now);
+  inLow.setValueAtTime(to.eq.low, middle);
+  outLow.cancelScheduledValues(0);
+  outLow.setValueAtTime(from.eq.low, now);
+  outLow.setValueAtTime(-26, middle);
+
+  const inLevel = to.gain.gain;
+  inLevel.cancelScheduledValues(0);
+  inLevel.setValueAtTime(0, now);
+  inLevel.linearRampToValueAtTime(1, middle);
+  const outLevel = from.gain.gain;
+  outLevel.cancelScheduledValues(0);
+  outLevel.setValueAtTime(1, now);
+  outLevel.setValueAtTime(1, middle);
+  outLevel.linearRampToValueAtTime(0, now + duration);
+
+  await wait(duration);
+  from.setLevel(0);
+  to.setLevel(1);
+  for (const [param, value] of [[outLow, from.eq.low], [inLow, to.eq.low]]) {
+    param.cancelScheduledValues(0);
+    param.value = value;
+  }
 }
 
 function wait(seconds) {
@@ -1073,15 +1310,147 @@ function wait(seconds) {
   });
 }
 
-function createAudioDeck(el, label) {
+// A deck plays either an audio file, through its Web Audio mixer channel, or a YouTube video,
+// through its own YouTube player. `deck.kind` says which engine the loaded track uses, so any
+// two songs (file or YouTube) can overlap in a crossfade.
+function createDeck(label, el, slot) {
+  const hostId = slot.querySelector("div").id;
+  let player = null;
+  let playerReady = null;
+  let lastError = null;
+  let needsStart = false;
+  let wantsPlay = false;
+  let youtubeLevel = 1;
+  let fadeTimer = 0;
+  let progressTimer = 0;
+  let startWaiter = null;
+
+  function ensurePlayer() {
+    if (!playerReady) {
+      let created = null;
+      const ready = loadYouTubeApi().then((YT) => new Promise((resolve) => {
+        created = new YT.Player(hostId, {
+          width: "100%",
+          height: "100%",
+          playerVars: { playsinline: 1, rel: 0, origin: window.location.origin },
+          events: {
+            onReady: () => resolve(created),
+            onStateChange: handleState,
+            onError: handleError,
+          },
+        });
+      }));
+      // A player that never gets ready must not hold up the booth mid-transition.
+      playerReady = withTimeout(ready, 20, "Couldn't start the YouTube player. Check the internet connection.");
+      playerReady.then((value) => {
+        player = value;
+      }, () => {
+        // Start clean next time instead of reusing a half-built player.
+        created?.destroy();
+        if (!document.getElementById(hostId)) {
+          const host = document.createElement("div");
+          host.id = hostId;
+          slot.append(host);
+        }
+        playerReady = null;
+      });
+    }
+    return playerReady;
+  }
+
+  function settleStart(error) {
+    if (!startWaiter) return;
+    const waiter = startWaiter;
+    startWaiter = null;
+    window.clearTimeout(waiter.timer);
+    if (error) waiter.reject(error);
+    else waiter.resolve();
+  }
+
+  // Shared by both engines: Auto mix moves on; in Manual mix a finished deck just stops and the
+  // DJ (or the safety net) decides what's next.
+  function finished() {
+    if (deck === activeDeck && booth.mixMode === "auto") nextTrack(false);
+    else updateLiveDeck();
+  }
+
+  function handleState(event) {
+    if (event.data === youtubeStates.playing) {
+      needsStart = false;
+      settleStart(null);
+    }
+    if (event.data === youtubeStates.ended && deck.kind === "youtube") {
+      wantsPlay = false;
+      finished();
+    }
+  }
+
+  function handleError(event) {
+    const reasons = {
+      2: "the video link is invalid",
+      5: "the video can't play in this browser",
+      100: "the video was removed or made private",
+      101: "the owner doesn't allow it outside YouTube",
+      150: "the owner doesn't allow it outside YouTube",
+    };
+    const reason = reasons[event.data] || `YouTube player error ${event.data}`;
+    const track = deck.track;
+    if (track) track.unplayable = true;
+    const error = Object.assign(new Error(reason), {
+      boothMessage: `YouTube won't play ${track?.title || "this video"}: ${reason}. Skipping it.`,
+    });
+    lastError = error;
+
+    if (startWaiter) {
+      settleStart(error);
+      return;
+    }
+
+    // The video failed while playing: say why and move on.
+    if (deck === activeDeck && booth.playing) {
+      booth.message = error.boothMessage;
+      nextTrack(false);
+    }
+  }
+
+  function showVideo(visible) {
+    slot.hidden = !visible;
+    layoutVideos();
+  }
+
+  // The deck's own level (fades and crossfader) times the booth's master volume.
+  function applyYoutubeLevel(value) {
+    youtubeLevel = clamp(value, 0, 1);
+    player?.setVolume(Math.round(youtubeLevel * booth.volume));
+  }
+
+  function stopAudio() {
+    el.pause();
+    if (el.getAttribute("src")) {
+      el.removeAttribute("src");
+      el.load();
+    }
+  }
+
+  function stopYouTube() {
+    window.clearInterval(fadeTimer);
+    window.clearInterval(progressTimer);
+    settleStart(new Error("stopped"));
+    wantsPlay = false;
+    player?.stopVideo();
+    showVideo(false);
+  }
+
   const deck = {
     kind: "audio",
     label,
     el,
+    slot,
     gain: null,
     source: null,
     eqNodes: null,
     filter: null,
+    echo: null,
     track: null,
     rate: 1,
     keyLock: true,
@@ -1090,58 +1459,138 @@ function createAudioDeck(el, label) {
     cue: null,
     tempoTimer: 0,
     get loaded() {
-      return Boolean(el.src);
+      return Boolean(deck.track);
     },
     get playing() {
-      return Boolean(el.src) && !el.paused;
+      if (!deck.track) return false;
+      return deck.kind === "youtube" ? wantsPlay : !el.paused;
     },
     get currentTime() {
+      if (deck.kind === "youtube") return player?.getCurrentTime?.() || 0;
       return el.currentTime || 0;
     },
     set currentTime(value) {
-      el.currentTime = value;
+      if (deck.kind === "youtube") player?.seekTo(value, true);
+      else el.currentTime = value;
     },
     get duration() {
+      if (deck.kind === "youtube") return player?.getDuration?.() || 0;
       return Number.isFinite(el.duration) ? el.duration : 0;
     },
     async load(track) {
-      el.pause();
-      el.src = track.url;
-      el.currentTime = 0;
+      if (track.kind === "youtube") {
+        await ensurePlayer();
+        stopAudio();
+        window.clearInterval(progressTimer);
+        deck.kind = "youtube";
+        lastError = null;
+        needsStart = true;
+        wantsPlay = false;
+        showVideo(true);
+      } else {
+        stopYouTube();
+        deck.kind = "audio";
+        el.pause();
+        el.src = track.url;
+        el.currentTime = 0;
+        // A new src resets the element's rate, so put the deck's tempo back on it.
+        deck.applyRate(deck.rate);
+      }
       deck.track = track;
       deck.cue = null;
-      // A new src resets the element's rate, so set the deck's tempo back to 0% explicitly.
-      deck.setTempo(1);
     },
-    play() {
-      return el.play();
+    preview() {
+      // Show the video's first frame while the booth is paused. Never cue right before
+      // playing: YouTube then ignores the play request and stays cued.
+      if (deck.kind === "youtube" && deck.track && needsStart) player.cueVideoById(deck.track.videoId);
+    },
+    async play() {
+      if (deck.kind !== "youtube") return el.play();
+
+      await ensurePlayer();
+      // YouTube already refused this video while cueing it.
+      if (deck.track?.unplayable && lastError) throw lastError;
+      wantsPlay = true;
+
+      // A newly loaded video must start even if the player is still playing the previous one.
+      if (needsStart || player.getPlayerState() !== youtubeStates.playing) {
+        try {
+          await new Promise((resolve, reject) => {
+            const timer = window.setTimeout(() => {
+              startWaiter = null;
+              // Still buffering (or an ad is loading) counts as started.
+              if (player.getPlayerState() === youtubeStates.buffering) {
+                resolve();
+                return;
+              }
+              reject(Object.assign(new Error("YouTube did not start"), {
+                boothMessage: "YouTube didn't start. Press Play on the Mac once to unlock audio.",
+              }));
+            }, 10000);
+            startWaiter = { resolve, reject, timer };
+            // A new video starts with loadVideoById; playVideo only resumes a paused one.
+            if (needsStart) player.loadVideoById(deck.track.videoId);
+            else player.playVideo();
+          });
+        } catch (error) {
+          wantsPlay = false;
+          throw error;
+        }
+      }
+
+      window.clearInterval(progressTimer);
+      // The YouTube player has no timeupdate event, so poll it while it plays.
+      progressTimer = window.setInterval(() => {
+        if (deck === activeDeck) updatePlaybackProgress();
+      }, 500);
     },
     pause() {
       el.pause();
+      if (deck.kind === "youtube") {
+        wantsPlay = false;
+        window.clearInterval(progressTimer);
+        player?.pauseVideo();
+      }
     },
     stop() {
-      el.pause();
-      el.removeAttribute("src");
-      el.load();
+      stopAudio();
+      stopYouTube();
       deck.track = null;
       deck.cue = null;
-      deck.setTempo(1);
     },
+    // Levels go to both engines, so a deck keeps its level when it switches between them.
     setLevel(value) {
-      if (!deck.gain) return;
-      // Clear leftover fade automation first: setting a value inside a curve's time range throws.
-      deck.gain.gain.cancelScheduledValues(0);
-      deck.gain.gain.value = value;
+      if (deck.gain) {
+        // Clear leftover fade automation first: setting a value inside a curve's time range throws.
+        deck.gain.gain.cancelScheduledValues(0);
+        deck.gain.gain.value = value;
+      }
+      window.clearInterval(fadeTimer);
+      applyYoutubeLevel(value);
     },
     // For the crossfader: glide to the new level over a few milliseconds so drags don't click.
     setFaderLevel(value) {
-      if (!deck.gain) return;
-      deck.gain.gain.setTargetAtTime(value, audioContext.currentTime, 0.015);
+      if (deck.gain) deck.gain.gain.setTargetAtTime(value, audioContext.currentTime, 0.015);
+      window.clearInterval(fadeTimer);
+      applyYoutubeLevel(value);
     },
     fade(curve, seconds) {
-      if (!deck.gain) return;
-      deck.gain.gain.cancelScheduledValues(0);
-      deck.gain.gain.setValueCurveAtTime(curve, audioContext.currentTime, seconds);
+      if (deck.gain) {
+        deck.gain.gain.cancelScheduledValues(0);
+        deck.gain.gain.setValueCurveAtTime(curve, audioContext.currentTime, seconds);
+      }
+      window.clearInterval(fadeTimer);
+      if (deck.kind !== "youtube") return;
+      // YouTube volume can't be scheduled ahead, so step it on a timer.
+      const started = performance.now();
+      fadeTimer = window.setInterval(() => {
+        const progress = Math.min(1, (performance.now() - started) / (seconds * 1000));
+        applyYoutubeLevel(curve[Math.round(progress * (curve.length - 1))]);
+        if (progress >= 1) window.clearInterval(fadeTimer);
+      }, 50);
+    },
+    refreshVolume() {
+      applyYoutubeLevel(youtubeLevel);
     },
     setTempo(rate) {
       window.clearInterval(deck.tempoTimer);
@@ -1168,13 +1617,18 @@ function createAudioDeck(el, label) {
   };
 
   el.addEventListener("timeupdate", updatePlaybackProgress);
-  el.addEventListener("ended", () => {
-    // In Manual mix a finished deck just stops; the DJ (or the safety net) decides what's next.
-    if (deck === activeDeck && booth.mixMode === "auto") nextTrack(false);
-    else updateLiveDeck();
-  });
+  el.addEventListener("ended", finished);
 
   return deck;
+}
+
+// Show the players of decks holding a YouTube video: one fills the stage, two (during a
+// crossfade or a manual mix) sit side by side, since YouTube's players may never be covered.
+function layoutVideos() {
+  const visible = [els.youtubeSlotA, els.youtubeSlotB].filter((slot) => !slot.hidden).length;
+  els.youtubeStage.hidden = visible === 0;
+  els.youtubeStage.classList.toggle("is-split", visible === 2);
+  els.stage.classList.toggle("has-video", visible > 0);
 }
 
 function applyFilter(node, value) {
@@ -1187,11 +1641,11 @@ function applyFilter(node, value) {
 function levelFor(deck) {
   if (booth.mixMode !== "manual") return deck === activeDeck ? 1 : 0;
   const { a, b } = crossfaderGains(booth.crossfader);
-  return deck === audioDecks[0] ? a : b;
+  return deck === decks[0] ? a : b;
 }
 
 function otherDeck(deck) {
-  return deck === audioDecks[0] ? audioDecks[1] : audioDecks[0];
+  return deck === decks[0] ? decks[1] : decks[0];
 }
 
 // --- BPM analysis ---------------------------------------------------------------------------
@@ -1289,6 +1743,10 @@ function syncDeck(deck) {
     mixerStatus("Sync needs a track on both decks.");
     return;
   }
+  if (deck.kind === "youtube" || other.kind === "youtube") {
+    mixerStatus("Sync needs two of your own files. YouTube's player doesn't let the booth read its tempo.");
+    return;
+  }
 
   const plan = beatMatchPlan(other, deck.track);
   if (!plan) {
@@ -1314,12 +1772,8 @@ function setMixMode(mode) {
   }
 
   if (mode === "manual") {
-    if (activeDeck.kind === "youtube" && activeDeck.loaded) {
-      mixerStatus("Manual mix works with your own files and downloads. Switch after this YouTube song.");
-      return;
-    }
     booth.mixMode = "manual";
-    setCrossfader(activeDeck === audioDecks[1] ? 1 : 0);
+    setCrossfader(activeDeck === decks[1] ? 1 : 0);
     mixerStatus("Manual mix: load songs with the A and B buttons in the queue, then mix with the crossfader.");
   } else {
     stopCrossfaderAnimation();
@@ -1341,17 +1795,17 @@ function setMixMode(mode) {
 
 // The deck the room hears most: the crossfader's side, unless only the other deck is playing.
 function liveDeck() {
-  const playing = audioDecks.filter((deck) => deck.playing);
+  const playing = decks.filter((deck) => deck.playing);
   if (playing.length === 1) return playing[0];
-  return booth.crossfader < 0.5 ? audioDecks[0] : audioDecks[1];
+  return booth.crossfader < 0.5 ? decks[0] : decks[1];
 }
 
 function setCrossfader(value) {
   booth.crossfader = clamp(value, 0, 1);
   els.crossfader.value = String(booth.crossfader);
   const { a, b } = crossfaderGains(booth.crossfader);
-  audioDecks[0].setFaderLevel(a);
-  audioDecks[1].setFaderLevel(b);
+  decks[0].setFaderLevel(a);
+  decks[1].setFaderLevel(b);
   updateLiveDeck();
 }
 
@@ -1364,7 +1818,7 @@ function updateLiveDeck() {
   }
 
   const live = liveDeck();
-  const playing = audioDecks.some((deck) => deck.playing);
+  const playing = decks.some((deck) => deck.playing);
   const index = booth.tracks.indexOf(live.track);
   const changed = live !== activeDeck || playing !== booth.playing || (index >= 0 && index !== booth.currentIndex);
 
@@ -1386,12 +1840,13 @@ function updateLiveDeck() {
 async function loadIntoDeck(deck, index) {
   const track = booth.tracks[index];
   if (!track) return;
-  if (track.kind !== "audio") {
-    mixerStatus("YouTube songs play in Auto mix.");
+
+  try {
+    await deck.load(track);
+  } catch (error) {
+    mixerStatus(error?.boothMessage || `Could not load ${track.title}.`);
     return;
   }
-
-  await deck.load(track);
   ensureBpm(track);
   mixerStatus(`${track.title} is on deck ${deck.label}.`);
   updateLiveDeck();
@@ -1420,7 +1875,7 @@ async function toggleDeck(deck) {
 
 // Play and Pause in Manual mix: pause everything, or resume the deck the room hears.
 async function manualToggle() {
-  const playing = audioDecks.filter((deck) => deck.playing);
+  const playing = decks.filter((deck) => deck.playing);
   if (playing.length) {
     playing.forEach((deck) => deck.pause());
     booth.message = "Paused";
@@ -1438,20 +1893,11 @@ async function manualToggle() {
   updateLiveDeck();
 }
 
-// Next, Cue, and Play now in Manual mix: put the song on the deck the room isn't hearing, then
-// fade over to it. YouTube songs need Auto mix, so the booth switches back for them.
+// Next, Cue, and Play now in Manual mix: put the song (file or YouTube) on the deck the room
+// isn't hearing, then fade over to it.
 async function manualPlay(index) {
   const track = booth.tracks[index];
   if (!track || manualBusy) return;
-
-  if (track.kind !== "audio") {
-    setMixMode("auto");
-    if (booth.mixMode === "auto") {
-      booth.message = "Switched to Auto mix for YouTube";
-      cueTrack(index, true);
-    }
-    return;
-  }
 
   manualBusy = true;
   try {
@@ -1460,7 +1906,7 @@ async function manualPlay(index) {
     await incoming.load(track);
     ensureBpm(track);
     // Start from the live side, so the fade goes all the way across.
-    setCrossfader(incoming === audioDecks[0] ? 1 : 0);
+    setCrossfader(incoming === decks[0] ? 1 : 0);
     if (!(await autoFade())) manualBusy = false;
   } catch {
     manualBusy = false;
@@ -1470,7 +1916,7 @@ async function manualPlay(index) {
 // Auto fade: start the far deck if needed (on beat when possible) and glide the crossfader over.
 async function autoFade() {
   const target = booth.crossfader < 0.5 ? 1 : 0;
-  const incoming = audioDecks[target];
+  const incoming = decks[target];
   const outgoing = otherDeck(incoming);
 
   if (!incoming.loaded) {
@@ -1510,7 +1956,7 @@ function animateCrossfader(target, seconds) {
 
     stopCrossfaderAnimation();
     // The deck that faded out has nothing left to do.
-    const faded = otherDeck(audioDecks[target]);
+    const faded = otherDeck(decks[target]);
     if (faded.playing) faded.pause();
     manualBusy = false;
     updateLiveDeck();
@@ -1527,7 +1973,7 @@ function stopCrossfaderAnimation() {
 function buildMixer() {
   const center = els.mixerPanel.querySelector(".mixer-center");
 
-  audioDecks.forEach((deck, index) => {
+  decks.forEach((deck, index) => {
     const root = els.deckStripTemplate.content.firstElementChild.cloneNode(true);
     const find = (selector) => root.querySelector(selector);
     const parts = {
@@ -1545,9 +1991,13 @@ function buildMixer() {
       eqValues: root.querySelectorAll(".deck-eq-value"),
       filter: find(".deck-filter"),
       filterValue: find(".deck-filter-value"),
+      platter: find(".deck-platter"),
+      platterLabel: find(".deck-platter-label"),
     };
 
     parts.name.textContent = `Deck ${deck.label}`;
+    parts.platterLabel.textContent = deck.label;
+    bindPlatter(deck, parts.platter);
     parts.play.addEventListener("click", () => toggleDeck(deck));
     parts.sync.addEventListener("click", () => syncDeck(deck));
     parts.cue.title = "Click to set a cue point, click again to jump back to it, right-click to clear it.";
@@ -1608,6 +2058,8 @@ function buildMixer() {
     setCrossfader(els.crossfader.value);
   });
   els.autoFadeBtn.addEventListener("click", () => autoFade());
+  els.mixNextBtn.addEventListener("click", () => nextTrack(true));
+  els.transitionSelect.addEventListener("change", () => setTransition(els.transitionSelect.value));
   els.beatMatchToggle.addEventListener("change", () => {
     booth.beatMatch = els.beatMatchToggle.checked;
     saveSettings();
@@ -1627,16 +2079,24 @@ function renderMixer() {
     tab.setAttribute("aria-pressed", String(selected));
   });
   els.crossfader.disabled = booth.mixMode !== "manual";
-  if (booth.mixMode !== "manual") els.crossfader.value = activeDeck === audioDecks[1] ? "1" : "0";
+  if (booth.mixMode !== "manual") els.crossfader.value = activeDeck === decks[1] ? "1" : "0";
   els.beatMatchToggle.checked = booth.beatMatch;
+  els.transitionSelect.value = booth.transition;
 
   deckStrips.forEach(({ deck, root, parts }) => {
     const live = deck === activeDeck && deck.playing;
     root.classList.toggle("is-live", live);
+    // YouTube's audio never reaches Web Audio, so its deck has no EQ, filter, tempo, or sync.
+    const youtube = deck.kind === "youtube" && deck.loaded;
+    root.classList.toggle("is-youtube", youtube);
+    [parts.tempo, parts.keyLock, parts.filter, parts.sync, ...parts.eq].forEach((control) => {
+      control.disabled = youtube;
+    });
     parts.state.textContent = !deck.loaded ? "Empty" : live ? "Live" : deck.playing ? "Playing" : "Paused";
     parts.state.classList.toggle("muted", !deck.playing);
     parts.track.textContent = deck.track ? deck.track.title : "No track loaded";
     parts.bpm.textContent = bpmText(deck);
+    renderPlatter(deck, parts);
     parts.play.textContent = deck.playing ? "Pause" : "Play";
     parts.cue.textContent = deck.cue === null ? "Set cue" : `Cue ${formatTime(deck.cue)}`;
     if (document.activeElement !== parts.tempo) parts.tempo.value = ((deck.rate - 1) * 100).toFixed(1);
@@ -1656,9 +2116,51 @@ function renderMixer() {
   });
 }
 
+// The platter works like a jog wheel: drag right to push the song ahead, left to hold it back
+// (up to ±4% while you hold it), then let go and it returns to the deck's tempo. Handy for
+// lining up beats by ear. Files only, since YouTube's player can't bend its speed smoothly.
+function bindPlatter(deck, platter) {
+  let startX = null;
+
+  platter.addEventListener("pointerdown", (event) => {
+    if (deck.kind !== "audio" || !deck.playing) return;
+    startX = event.clientX;
+    platter.setPointerCapture(event.pointerId);
+    platter.classList.add("is-nudging");
+  });
+
+  platter.addEventListener("pointermove", (event) => {
+    if (startX === null) return;
+    const push = clamp((event.clientX - startX) / 60, -1, 1);
+    deck.el.playbackRate = deck.rate * (1 + 0.04 * push);
+  });
+
+  const release = () => {
+    if (startX === null) return;
+    startX = null;
+    deck.el.playbackRate = deck.rate;
+    platter.classList.remove("is-nudging");
+  };
+  platter.addEventListener("pointerup", release);
+  platter.addEventListener("pointercancel", release);
+  platter.addEventListener("lostpointercapture", release);
+}
+
+function renderPlatter(deck, parts) {
+  const { platter, platterLabel } = parts;
+  // One turn per 1.8 seconds is 33⅓ RPM; the tempo fader speeds the record up or down with it.
+  platter.style.setProperty("--spin", `${(1.8 / (deck.rate || 1)).toFixed(3)}s`);
+  platter.classList.toggle("is-spinning", deck.playing);
+  platter.classList.toggle("is-empty", !deck.loaded);
+  const videoId = deck.kind === "youtube" ? deck.track?.videoId : null;
+  platterLabel.style.backgroundImage = videoId ? `url("https://i.ytimg.com/vi/${videoId}/mqdefault.jpg")` : "";
+  platterLabel.classList.toggle("has-art", Boolean(videoId));
+}
+
 function bpmText(deck) {
   const track = deck.track;
   if (!track) return "BPM —";
+  if (deck.kind === "youtube") return "YouTube: volume and crossfader only";
   if (track.bpm === undefined) return analysisJobs.has(track.key) ? "BPM: analyzing…" : "BPM —";
   if (!track.bpm) return "BPM: no steady beat";
   const playingAt = (track.bpm * deck.rate).toFixed(1);
@@ -1667,202 +2169,6 @@ function bpmText(deck) {
 
 function mixerStatus(text) {
   els.mixerStatus.textContent = text;
-}
-
-function createYouTubeDeck() {
-  let player = null;
-  let playerReady = null;
-  let track = null;
-  let lastError = null;
-  let needsStart = false;
-  let level = 1;
-  let fadeTimer = 0;
-  let progressTimer = 0;
-  let startWaiter = null;
-
-  function ensurePlayer() {
-    if (!playerReady) {
-      let created = null;
-      const ready = loadYouTubeApi().then((YT) => new Promise((resolve) => {
-        created = new YT.Player("youtube-player", {
-          width: "100%",
-          height: "100%",
-          playerVars: { playsinline: 1, rel: 0, origin: window.location.origin },
-          events: {
-            onReady: () => resolve(created),
-            onStateChange: handleState,
-            onError: handleError,
-          },
-        });
-      }));
-      // A player that never gets ready must not hold up the booth mid-transition.
-      playerReady = withTimeout(ready, 20, "Couldn't start the YouTube player. Check the internet connection.");
-      playerReady.then((value) => {
-        player = value;
-      }, () => {
-        // Start clean next time instead of reusing a half-built player.
-        created?.destroy();
-        if (!document.querySelector("#youtube-player")) {
-          const host = document.createElement("div");
-          host.id = "youtube-player";
-          els.youtubeStage.append(host);
-        }
-        playerReady = null;
-      });
-    }
-    return playerReady;
-  }
-
-  function settleStart(error) {
-    if (!startWaiter) return;
-    const waiter = startWaiter;
-    startWaiter = null;
-    window.clearTimeout(waiter.timer);
-    if (error) waiter.reject(error);
-    else waiter.resolve();
-  }
-
-  function handleState(event) {
-    if (event.data === youtubeStates.playing) {
-      needsStart = false;
-      settleStart(null);
-    }
-    if (event.data === youtubeStates.ended && deck === activeDeck) nextTrack(false);
-  }
-
-  function handleError(event) {
-    const reasons = {
-      2: "the video link is invalid",
-      5: "the video can't play in this browser",
-      100: "the video was removed or made private",
-      101: "the owner doesn't allow it outside YouTube",
-      150: "the owner doesn't allow it outside YouTube",
-    };
-    const reason = reasons[event.data] || `YouTube player error ${event.data}`;
-    if (track) track.unplayable = true;
-    const error = Object.assign(new Error(reason), {
-      boothMessage: `YouTube won't play ${track?.title || "this video"}: ${reason}. Skipping it.`,
-    });
-    lastError = error;
-
-    if (startWaiter) {
-      settleStart(error);
-      return;
-    }
-
-    // The video failed while playing: say why and move on.
-    if (deck === activeDeck && booth.playing) {
-      booth.message = error.boothMessage;
-      nextTrack(false);
-    }
-  }
-
-  function showVideo(visible) {
-    els.youtubeStage.hidden = !visible;
-    els.stage.classList.toggle("has-video", visible);
-  }
-
-  // The deck's own level (fades) times the booth's master volume.
-  function applyLevel(value) {
-    level = clamp(value, 0, 1);
-    player?.setVolume(Math.round(level * booth.volume));
-  }
-
-  function stopTimers() {
-    window.clearInterval(fadeTimer);
-    window.clearInterval(progressTimer);
-  }
-
-  const deck = {
-    kind: "youtube",
-    label: "YouTube",
-    get loaded() {
-      return Boolean(track);
-    },
-    get currentTime() {
-      return player?.getCurrentTime?.() || 0;
-    },
-    set currentTime(value) {
-      player?.seekTo(value, true);
-    },
-    get duration() {
-      return player?.getDuration?.() || 0;
-    },
-    async load(item) {
-      await ensurePlayer();
-      track = item;
-      lastError = null;
-      needsStart = true;
-      showVideo(true);
-    },
-    preview() {
-      // Show the video's first frame while the booth is paused. Never cue right before
-      // playing: YouTube then ignores the play request and stays cued.
-      if (track && needsStart) player.cueVideoById(track.videoId);
-    },
-    async play() {
-      await ensurePlayer();
-      // YouTube already refused this video while cueing it.
-      if (track?.unplayable && lastError) throw lastError;
-
-      // A newly loaded video must start even while the previous one is still playing (a
-      // YouTube-to-YouTube switch); otherwise only start when paused or stopped.
-      if (needsStart || player.getPlayerState() !== youtubeStates.playing) {
-        await new Promise((resolve, reject) => {
-          const timer = window.setTimeout(() => {
-            startWaiter = null;
-            // Still buffering (or an ad is loading) counts as started.
-            if (player.getPlayerState() === youtubeStates.buffering) {
-              resolve();
-              return;
-            }
-            reject(Object.assign(new Error("YouTube did not start"), {
-              boothMessage: "YouTube didn't start. Press Play on the Mac once to unlock audio.",
-            }));
-          }, 10000);
-          startWaiter = { resolve, reject, timer };
-          // A new video starts with loadVideoById; playVideo only resumes a paused one.
-          if (needsStart) player.loadVideoById(track.videoId);
-          else player.playVideo();
-        });
-      }
-
-      window.clearInterval(progressTimer);
-      // The YouTube player has no timeupdate event, so poll it while it plays.
-      progressTimer = window.setInterval(() => {
-        if (deck === activeDeck) updatePlaybackProgress();
-      }, 500);
-    },
-    pause() {
-      window.clearInterval(progressTimer);
-      player?.pauseVideo();
-    },
-    stop() {
-      stopTimers();
-      settleStart(new Error("stopped"));
-      player?.stopVideo();
-      track = null;
-      showVideo(false);
-    },
-    setLevel(value) {
-      window.clearInterval(fadeTimer);
-      applyLevel(value);
-    },
-    fade(curve, seconds) {
-      window.clearInterval(fadeTimer);
-      const started = performance.now();
-      fadeTimer = window.setInterval(() => {
-        const progress = Math.min(1, (performance.now() - started) / (seconds * 1000));
-        applyLevel(curve[Math.round(progress * (curve.length - 1))]);
-        if (progress >= 1) window.clearInterval(fadeTimer);
-      }, 50);
-    },
-    refreshVolume() {
-      applyLevel(level);
-    },
-  };
-
-  return deck;
 }
 
 function withTimeout(promise, seconds, boothMessage) {
@@ -2022,6 +2328,7 @@ function saveSettings() {
     autoDj: booth.autoDj,
     mixMode: booth.mixMode,
     beatMatch: booth.beatMatch,
+    transition: booth.transition,
   });
 }
 
@@ -2057,7 +2364,7 @@ function renderDisplay() {
   els.energyReadout.textContent = String(booth.energy);
   els.crossfadeReadout.textContent = `${booth.crossfade}s`;
   els.autodjReadout.textContent = booth.autoDj ? "Auto DJ on" : "Manual";
-  els.deckIndicator.textContent = activeDeck.label;
+  els.deckIndicator.textContent = activeDeck.kind === "youtube" && activeDeck.loaded ? `${activeDeck.label} · YouTube` : activeDeck.label;
   els.nextTrackTitle.textContent = nextTrack ? nextTrack.title : "No queue";
   els.roomModeReadout.textContent = mode;
   els.queueSizeReadout.textContent = String(booth.tracks.length);
@@ -2116,8 +2423,8 @@ function renderQueue() {
     actions.append(cue, vote, tagButton("Warm", track, 28), tagButton("Groove", track, 55), tagButton("Peak", track, 86));
     if (booth.mixMode === "manual" && track.kind === "audio") {
       actions.append(
-        actionButton("A", () => loadIntoDeck(audioDecks[0], index)),
-        actionButton("B", () => loadIntoDeck(audioDecks[1], index)),
+        actionButton("A", () => loadIntoDeck(decks[0], index)),
+        actionButton("B", () => loadIntoDeck(decks[1], index)),
       );
     }
 
@@ -2178,7 +2485,16 @@ function renderYouTubeResults(section, results) {
     return;
   }
 
-  container.replaceChildren(...results.map((video) => {
+  const addAll = actionButton(`Add all ${results.length} to the queue`, () => {
+    if (isRemote) sendCommand({ type: "addYouTubeList", videos: results });
+    else addYouTubeList(results);
+    section.querySelector(".search-status").textContent = `Added ${results.length} songs to the booth queue.`;
+    addAll.disabled = true;
+    addAll.textContent = "All added";
+  });
+  addAll.classList.add("add-all");
+
+  container.replaceChildren(addAll, ...results.map((video) => {
     const row = document.createElement("article");
     row.className = "search-result has-thumb";
 
@@ -2296,6 +2612,7 @@ function renderRemote() {
   els.remoteVolume.value = String(remoteState.volume ?? 100);
   els.remoteEnergy.value = String(remoteState.energy ?? 52);
   els.remoteCrossfade.value = String(remoteState.crossfade ?? 5);
+  if (document.activeElement !== els.remoteTransition) els.remoteTransition.value = remoteState.transition || "crossfade";
   els.remoteQueueCount.textContent = `${playlist.length} tracks`;
 
   // Show the booth's answer to a voice command under the phone's voice box. The first state a
@@ -2373,6 +2690,7 @@ function syncFromDisplay(force = false) {
     visualStyle: booth.visualStyle,
     hypeUntil: booth.hypeUntil,
     volume: booth.volume,
+    transition: booth.transition,
     message: booth.message,
   });
 }

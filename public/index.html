@@ -55,7 +55,12 @@
           <div class="stage">
             <canvas id="visualizer" width="1200" height="680"></canvas>
             <div id="youtube-stage" class="youtube-stage" hidden>
-              <div id="youtube-player"></div>
+              <div id="youtube-slot-a" class="youtube-slot" hidden>
+                <div id="youtube-player-a"></div>
+              </div>
+              <div id="youtube-slot-b" class="youtube-slot" hidden>
+                <div id="youtube-player-b"></div>
+              </div>
             </div>
             <div class="stage-chrome" aria-hidden="true">
               <span></span>
@@ -168,6 +173,7 @@
                 <input class="search-input" type="search" placeholder="Song, artist, vibe" autocomplete="off">
                 <button class="search-button" type="submit">Search</button>
               </form>
+              <div class="search-recent" aria-label="Recent searches"></div>
               <p class="search-status">Open audio collections, saved locally.</p>
               <div class="search-results"></div>
             </div>
@@ -203,6 +209,19 @@
                 <span>B</span>
               </label>
               <button id="auto-fade-btn" class="queue-action" type="button">Auto fade</button>
+              <label class="deck-control">
+                <span>Transition</span>
+                <select id="transition-select" class="search-input transition-select">
+                  <option value="crossfade">Crossfade</option>
+                  <option value="bassSwap">Bass swap</option>
+                  <option value="filter">Filter sweep</option>
+                  <option value="echo">Echo out</option>
+                  <option value="brake">Brake (vinyl stop)</option>
+                  <option value="cut">Cut on the beat</option>
+                  <option value="random">Mix it up (random)</option>
+                </select>
+              </label>
+              <button id="mix-next-btn" class="queue-action mix-next" type="button">Mix next</button>
               <label class="switch-row">
                 <span>Beat match</span>
                 <input id="beatmatch-toggle" type="checkbox" checked>
@@ -218,12 +237,19 @@
               <strong class="deck-name">Deck A</strong>
               <span class="pill muted deck-state">Empty</span>
             </div>
-            <p class="deck-track">No track loaded</p>
-            <p class="deck-bpm">BPM —</p>
-            <div class="deck-buttons">
-              <button type="button" class="queue-action deck-play">Play</button>
-              <button type="button" class="queue-action deck-cue">Set cue</button>
-              <button type="button" class="queue-action deck-sync">Sync</button>
+            <div class="deck-top">
+              <div class="deck-platter is-empty" title="Drag left or right to nudge the song slower or faster">
+                <div class="deck-platter-label">A</div>
+              </div>
+              <div class="deck-info">
+                <p class="deck-track">No track loaded</p>
+                <p class="deck-bpm">BPM —</p>
+                <div class="deck-buttons">
+                  <button type="button" class="queue-action deck-play">Play</button>
+                  <button type="button" class="queue-action deck-cue">Set cue</button>
+                  <button type="button" class="queue-action deck-sync">Sync</button>
+                </div>
+              </div>
             </div>
             <label class="deck-control">
               <span>Tempo <output class="deck-tempo-value">0.0%</output></span>
@@ -303,6 +329,7 @@
               <input class="search-input" type="search" placeholder="Song, artist, vibe" autocomplete="off">
               <button class="search-button" type="submit">Search</button>
             </form>
+            <div class="search-recent" aria-label="Recent searches"></div>
             <p class="search-status">Open audio collections, saved locally.</p>
             <div class="search-results"></div>
           </div>
@@ -319,6 +346,18 @@
             <label>
               <span>Crossfade</span>
               <input id="remote-crossfade" type="range" min="0" max="12" value="5">
+            </label>
+            <label>
+              <span>Transition</span>
+              <select id="remote-transition" class="search-input transition-select">
+                <option value="crossfade">Crossfade</option>
+                <option value="bassSwap">Bass swap</option>
+                <option value="filter">Filter sweep</option>
+                <option value="echo">Echo out</option>
+                <option value="brake">Brake (vinyl stop)</option>
+                <option value="cut">Cut on the beat</option>
+                <option value="random">Mix it up (random)</option>
+              </select>
             </label>
           </div>
 

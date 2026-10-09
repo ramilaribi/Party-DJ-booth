@@ -195,7 +195,42 @@ async function youtubeGet(endpoint, params) {
   if (reason === "accessNotConfigured" || /has not been used|is disabled/i.test(message)) {
     throw youtubeError(503, "YouTube Data API v3 isn't enabled for this API key's Google Cloud project.");
   }
+  if (reason === "playlistNotFound" || response.status === 404) {
+    throw youtubeError(404, "Couldn't find that playlist. It may be private, or a YouTube Mix, which can't be imported.");
+  }
   throw youtubeError(502, `YouTube search failed (${response.status}).`);
+}
+
+// Lengths, titles, and thumbnails for up to 50 video IDs at a time (videos.list, 1 quota unit per
+// call), in the order given. Drops live streams (no length, so Auto DJ can't plan around them) and
+// videos whose owners block playing them outside YouTube.
+async function videoDetails(ids) {
+  const byId = new Map();
+  for (let start = 0; start < ids.length; start += 50) {
+    const batch = ids.slice(start, start + 50);
+    const videos = await youtubeGet("videos", { part: "snippet,contentDetails,status", id: batch.join(",") });
+    (videos.items || []).forEach((item) => byId.set(item.id, item));
+  }
+
+  return ids
+    .map((id) => byId.get(id))
+    .filter((item) => item && item.status?.embeddable !== false)
+    .map((item) => ({
+      videoId: item.id,
+      title: item.snippet?.title || "YouTube video",
+      channel: item.snippet?.channelTitle || "YouTube",
+      duration: isoDurationSeconds(item.contentDetails?.duration),
+      thumbnail: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || "",
+      url: `https://www.youtube.com/watch?v=${item.id}`,
+    }))
+    .filter((video) => video.duration > 0);
+}
+
+function sendYoutubeError(res, error) {
+  res.status(error.status || 502).json({
+    error: error.status ? error.message : "YouTube is unavailable right now. Check the internet connection and try again.",
+    detail: error.message,
+  });
 }
 
 function cleanSearchTerm(value) {
@@ -400,29 +435,43 @@ app.get("/api/youtube/search", requirePairing, async (req, res) => {
       return;
     }
 
-    // search.list has no durations, which Auto DJ needs; videos.list adds them for 1 quota unit.
-    const videos = await youtubeGet("videos", { part: "snippet,contentDetails", id: ids.join(",") });
-    const byId = new Map((videos.items || []).map((item) => [item.id, item]));
-    const results = ids
-      .map((id) => byId.get(id))
-      .filter(Boolean)
-      .map((item) => ({
-        videoId: item.id,
-        title: item.snippet?.title || "YouTube video",
-        channel: item.snippet?.channelTitle || "YouTube",
-        duration: isoDurationSeconds(item.contentDetails?.duration),
-        thumbnail: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || "",
-        url: `https://www.youtube.com/watch?v=${item.id}`,
-      }))
-      // Live streams report no length, so Auto DJ could never plan the next song.
-      .filter((video) => video.duration > 0);
-
-    res.json({ query, results });
+    // search.list has no durations, which Auto DJ needs; videos.list adds them.
+    res.json({ query, results: await videoDetails(ids) });
   } catch (error) {
-    res.status(error.status || 502).json({
-      error: error.status ? error.message : "YouTube search is unavailable right now. Check the internet connection and try again.",
-      detail: error.message,
-    });
+    sendYoutubeError(res, error);
+  }
+});
+
+// Import a YouTube playlist (up to 100 videos): 2 quota units per 50 videos, versus 100 per search.
+app.get("/api/youtube/playlist", requirePairing, async (req, res) => {
+  if (!youtubeApiKey) {
+    res.status(503).json({ error: "YouTube isn't set up yet. Add YOUTUBE_API_KEY to the .env file and restart the server." });
+    return;
+  }
+
+  const playlistId = String(req.query.list || "");
+  if (!/^[A-Za-z0-9_-]{10,64}$/.test(playlistId)) {
+    res.status(400).json({ error: "That doesn't look like a YouTube playlist link." });
+    return;
+  }
+
+  try {
+    const ids = [];
+    let pageToken = "";
+    do {
+      const page = await youtubeGet("playlistItems", {
+        part: "contentDetails",
+        playlistId,
+        maxResults: "50",
+        ...(pageToken ? { pageToken } : {}),
+      });
+      ids.push(...(page.items || []).map((item) => item.contentDetails?.videoId).filter(Boolean));
+      pageToken = page.nextPageToken || "";
+    } while (pageToken && ids.length < 100);
+
+    res.json({ query: playlistId, results: await videoDetails(ids.slice(0, 100)) });
+  } catch (error) {
+    sendYoutubeError(res, error);
   }
 });
 

@@ -43,6 +43,12 @@ const cases = [
   ["fade", { action: "autoFade" }],
   ["auto fade", { action: "autoFade" }],
   ["crossfade now", { action: "autoFade" }],
+  ["transition echo out", { action: "transition", value: "echo" }],
+  ["use the bass swap", { action: "transition", value: "bassSwap" }],
+  ["set transition to filter sweep", { action: "transition", value: "filter" }],
+  ["vinyl stop", { action: "transition", value: "brake" }],
+  ["transition cut", { action: "transition", value: "cut" }],
+  ["mix it up", { action: "transition", value: "random" }],
   ["play One More Time by Daft Punk", { action: "playSong", query: "one more time by daft punk" }],
   ["put on the song despacito", { action: "playSong", query: "despacito" }],
   ["add Get Lucky to the queue", { action: "queueSong", query: "get lucky" }],
@@ -58,7 +64,7 @@ for (const [spoken, expected] of cases) {
 }
 
 test("ignores speech that isn't a command", () => {
-  for (const spoken of ["", "   ", "hello there", "what a night", "dj"]) {
+  for (const spoken of ["", "   ", "hello there", "what a night", "dj", "transition banana"]) {
     assert.equal(parseVoiceCommand(spoken), null, spoken);
   }
 });

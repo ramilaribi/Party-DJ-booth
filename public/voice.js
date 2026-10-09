@@ -26,6 +26,8 @@ const patterns = [
   [/^(?:turn )?auto ?dj (on|off)$|^turn (on|off) auto ?dj$/, (m) => ({ action: "autoDj", value: (m[1] || m[2]) === "on" })],
   [/^(?:switch to |go to |use )?(manual|auto)(?:matic)? mix(?:ing)?(?: mode)?$/, (m) => ({ action: "mixMode", value: m[1] })],
   [/^(?:auto ?fade|fade(?: over| across| it)?|cross ?fade(?: over| across)?)$/, () => ({ action: "autoFade" })],
+  [/^(?:use |set |switch to )?(?:the )?transition (?:to )?(.+)$/, (m) => transitionCommand(m[1])],
+  [/^(?:use )?(?:the |a )?(bass swap|filter sweep|echo out|vinyl stop|brake|mix it up)(?: transition)?$/, (m) => transitionCommand(m[1])],
   [/^(?:queue|queue up|add)(?: up)? (.+?)(?: to (?:the )?queue| next| later)?$/, (m) => songCommand("queueSong", m[1])],
   [/^(?:play|put on|i want to hear|can you play|could you play) (.+)$/, (m) => songCommand("playSong", m[1])],
 ];
@@ -74,6 +76,32 @@ export function findQueuedTrack(query, tracks, minimumScore = 0.75) {
   });
 
   return best;
+}
+
+const transitionWords = {
+  crossfade: "crossfade",
+  "cross fade": "crossfade",
+  fade: "crossfade",
+  "bass swap": "bassSwap",
+  bass: "bassSwap",
+  filter: "filter",
+  "filter sweep": "filter",
+  sweep: "filter",
+  echo: "echo",
+  "echo out": "echo",
+  brake: "brake",
+  break: "brake",
+  "vinyl stop": "brake",
+  cut: "cut",
+  "cut on the beat": "cut",
+  random: "random",
+  "mix it up": "random",
+  "surprise me": "random",
+};
+
+function transitionCommand(words) {
+  const value = transitionWords[words.trim()];
+  return value ? { action: "transition", value } : null;
 }
 
 function songCommand(action, query) {

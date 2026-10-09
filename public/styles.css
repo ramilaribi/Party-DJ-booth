@@ -21,6 +21,12 @@
   box-sizing: border-box;
 }
 
+/* `hidden` always wins: a class that sets `display` (like .remote-view's grid) would otherwise
+   override it, which used to show the phone remote's panel on the Mac booth. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   min-height: 100%;
@@ -271,14 +277,32 @@ label span,
   height: 100%;
 }
 
+/* The video fills the stage's width, centered, but never taller than about 70% of the window, so
+   the now-playing panel below it stays in view. */
 .youtube-stage {
   position: relative;
   z-index: 2;
-  width: min(calc(100% - 2rem), 46rem);
+  display: grid;
+  gap: 0.6rem;
+  width: min(calc(100% - 2rem), calc(70vh * 16 / 9));
+  margin: 1rem auto;
+}
+
+.youtube-stage[hidden],
+.youtube-slot[hidden] {
+  display: none;
+}
+
+/* During a crossfade (or a manual mix) both decks' videos show side by side. */
+.youtube-stage.is-split {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: calc(100% - 2rem);
+}
+
+.youtube-slot {
   min-width: 200px;
   min-height: 200px;
   aspect-ratio: 16 / 9;
-  margin: 1rem;
   overflow: hidden;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
@@ -286,11 +310,7 @@ label span,
   box-shadow: var(--shadow);
 }
 
-.youtube-stage[hidden] {
-  display: none;
-}
-
-.youtube-stage iframe {
+.youtube-slot iframe {
   display: block;
   width: 100%;
   height: 100%;
@@ -694,6 +714,37 @@ input[type="range"] {
   background: rgba(255, 255, 255, 0.045);
 }
 
+.search-recent {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.search-recent:empty {
+  display: none;
+}
+
+.search-chip {
+  min-height: 2.2rem;
+  padding: 0.3rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.search-chip:hover {
+  border-color: rgba(32, 243, 198, 0.55);
+}
+
+.add-all {
+  width: 100%;
+  background: linear-gradient(135deg, var(--teal), #87ffe2);
+  color: #06100d;
+}
+
 .search-result.has-thumb {
   grid-template-columns: 5.5rem minmax(0, 1fr);
   align-items: start;
@@ -826,6 +877,95 @@ input[type="range"] {
   margin: 0;
   font-weight: 900;
   overflow-wrap: anywhere;
+}
+
+.deck-top {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.9rem;
+  align-items: center;
+}
+
+.deck-info {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+/* A vinyl record: grooves from repeating rings, a sheen from a conic highlight. */
+.deck-platter {
+  --spin: 1.8s;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 7.5rem;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background:
+    conic-gradient(from 30deg, transparent 0 20%, rgba(255, 255, 255, 0.09) 25%, transparent 30% 70%, rgba(255, 255, 255, 0.07) 75%, transparent 80%),
+    repeating-radial-gradient(circle, #111 0 2px, #1b1b1b 2px 4px);
+  box-shadow: 0 0 0 0.3rem rgba(255, 255, 255, 0.06), 0 12px 30px rgba(0, 0, 0, 0.5);
+  cursor: grab;
+  touch-action: none;
+  animation: platter-spin var(--spin) linear infinite;
+  animation-play-state: paused;
+}
+
+.deck-platter.is-spinning {
+  animation-play-state: running;
+}
+
+.deck-platter.is-nudging {
+  cursor: grabbing;
+  box-shadow: 0 0 0 0.3rem rgba(32, 243, 198, 0.35), 0 12px 30px rgba(0, 0, 0, 0.5);
+}
+
+.deck-platter.is-empty {
+  opacity: 0.45;
+}
+
+.deck-platter-label {
+  display: grid;
+  place-items: center;
+  width: 38%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--teal), var(--pink));
+  background-position: center;
+  background-size: cover;
+  color: #06100d;
+  font-weight: 900;
+  box-shadow: 0 0 0 0.2rem rgba(0, 0, 0, 0.6);
+}
+
+.deck-platter-label.has-art {
+  color: transparent;
+}
+
+@keyframes platter-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deck-platter {
+    animation: none;
+  }
+}
+
+.deck-strip.is-youtube .deck-control {
+  opacity: 0.45;
+}
+
+.transition-select {
+  min-height: 2.75rem;
+  color-scheme: dark;
+}
+
+.mix-next {
+  background: linear-gradient(135deg, var(--teal), #87ffe2);
+  color: #06100d;
 }
 
 .deck-bpm {
