@@ -338,18 +338,28 @@ app.post("/api/download", async (req, res) => {
   }
 });
 
+function updatePresence() {
+  let displays = 0;
+  let remotes = 0;
+
+  // Count live sockets instead of keeping running totals, so reconnects and repeat
+  // registrations can't push the numbers out of sync.
+  for (const client of io.of("/").sockets.values()) {
+    if (client.data.role === "display") displays += 1;
+    if (client.data.role === "remote") remotes += 1;
+  }
+
+  partyState.connectedDisplays = displays;
+  partyState.connectedRemotes = remotes;
+  io.emit("presence", { displays, remotes });
+}
+
 io.on("connection", (socket) => {
   socket.emit("state", partyState);
 
   socket.on("register", (payload = {}) => {
     socket.data.role = payload.role === "remote" ? "remote" : "display";
-    if (socket.data.role === "display") partyState.connectedDisplays += 1;
-    if (socket.data.role === "remote") partyState.connectedRemotes += 1;
-
-    io.emit("presence", {
-      displays: partyState.connectedDisplays,
-      remotes: partyState.connectedRemotes,
-    });
+    updatePresence();
     socket.emit("state", partyState);
   });
 
@@ -372,17 +382,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
-    if (socket.data.role === "display") {
-      partyState.connectedDisplays = Math.max(0, partyState.connectedDisplays - 1);
-    }
-    if (socket.data.role === "remote") {
-      partyState.connectedRemotes = Math.max(0, partyState.connectedRemotes - 1);
-    }
-
-    io.emit("presence", {
-      displays: partyState.connectedDisplays,
-      remotes: partyState.connectedRemotes,
-    });
+    updatePresence();
   });
 });
 

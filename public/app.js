@@ -96,7 +96,6 @@ function boot() {
   els.remoteView.hidden = !isRemote;
   els.queuePanel.hidden = isRemote;
 
-  socket.emit("register", { role: isRemote ? "remote" : "display" });
   bindSocket();
   bindSearchControls();
 
@@ -115,6 +114,8 @@ function boot() {
 
 function bindSocket() {
   socket.on("connect", () => {
+    // Register on every connect: after a reconnect the server sees a new socket with no role.
+    socket.emit("register", { role: isRemote ? "remote" : "display" });
     els.connectionPill.textContent = isRemote ? "Remote linked" : "Booth live";
   });
 
@@ -370,6 +371,7 @@ function addDownloadedTrack(downloadedTrack, announce) {
 
   const title = downloadedTrack.title || parseTrackName(downloadedTrack.fileName || "Downloaded track").title;
   const artist = downloadedTrack.artist || "Downloaded";
+  const saved = trackPrefs[key] || {};
   const track = {
     id: safeId(),
     key,
@@ -379,7 +381,7 @@ function addDownloadedTrack(downloadedTrack, announce) {
     size: 0,
     duration: 0,
     url: downloadedTrack.url,
-    energy: downloadedTrack.energy ?? guessEnergy(`${title} ${artist}`),
+    energy: saved.energy ?? downloadedTrack.energy ?? guessEnergy(`${title} ${artist}`),
     votes: 0,
     plays: 0,
     source: downloadedTrack.source || "Downloaded",
@@ -692,11 +694,11 @@ function saveSettings() {
   });
 }
 
-function saveTrackPrefs() {
-  const prefs = {};
-  booth.tracks.forEach((track) => {
-    prefs[track.key] = { energy: track.energy };
-  });
+function saveTrackPrefs(track) {
+  // Merge into the stored tags so tags for tracks not loaded this session survive.
+  const prefs = readJson(trackPrefsKey, {});
+  prefs[track.key] = { energy: track.energy };
+  trackPrefs[track.key] = prefs[track.key];
   writeJson(trackPrefsKey, prefs);
 }
 
@@ -856,7 +858,7 @@ function actionButton(label, onClick) {
 function tagButton(label, track, energy) {
   const button = actionButton(label, () => {
     track.energy = energy;
-    saveTrackPrefs();
+    saveTrackPrefs(track);
     renderDisplay();
     syncFromDisplay(true);
   });
