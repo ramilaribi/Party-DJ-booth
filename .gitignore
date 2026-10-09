@@ -1,0 +1,5 @@
+node_modules/
+music-downloads/
+.music-library.json
+.DS_Store
+npm-debug.log*

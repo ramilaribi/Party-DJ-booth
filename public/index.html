@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#050505">
+    <meta
+      name="description"
+      content="A local party DJ booth for Mac playback and phone control."
+    >
+    <title>Party DJ Booth</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="app-shell" data-role="display">
+      <section class="booth-panel">
+        <div class="topbar">
+          <div class="brand-lockup">
+            <div class="brand-mark" aria-hidden="true">
+              <span></span>
+            </div>
+            <div>
+              <p class="eyebrow">Private Party System</p>
+              <h1 id="screen-title">Mac Booth</h1>
+            </div>
+          </div>
+          <div class="status-cluster" aria-label="Connection status">
+            <span id="connection-pill" class="pill">Connecting</span>
+            <span id="remote-count" class="pill muted">0 phones</span>
+            <span id="autodj-readout" class="pill muted">Auto DJ on</span>
+          </div>
+        </div>
+
+        <section class="command-strip" aria-label="Booth status">
+          <div>
+            <span>Energy</span>
+            <strong id="energy-readout">52</strong>
+          </div>
+          <div>
+            <span>Crossfade</span>
+            <strong id="crossfade-readout">5s</strong>
+          </div>
+          <div>
+            <span>Deck</span>
+            <strong id="deck-indicator">A</strong>
+          </div>
+          <div>
+            <span>Next</span>
+            <strong id="next-track-title">No queue</strong>
+          </div>
+        </section>
+
+        <section id="display-view" class="display-grid">
+          <div class="stage">
+            <canvas id="visualizer" width="1200" height="680"></canvas>
+            <div class="stage-chrome" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
+            <div class="stage-overlay">
+              <div class="stage-copy">
+                <p class="mode-label" id="mode-label">Warmup</p>
+                <h2 id="track-title">Load your playlist</h2>
+                <p id="track-meta">Choose your music files on the Mac. Your phone becomes the booth remote.</p>
+              </div>
+              <div class="stage-console">
+                <div class="meter-row">
+                  <span id="elapsed-time">0:00</span>
+                  <div class="progress-shell" aria-label="Track progress">
+                    <div id="progress-bar" class="progress-bar"></div>
+                  </div>
+                  <span id="remaining-time">0:00</span>
+                </div>
+                <div class="stage-mini-grid" aria-label="Live playback details">
+                  <div>
+                    <span>Room</span>
+                    <strong id="room-mode-readout">Warmup</strong>
+                  </div>
+                  <div>
+                    <span>Queue</span>
+                    <strong id="queue-size-readout">0</strong>
+                  </div>
+                  <div>
+                    <span>Signal</span>
+                    <strong id="signal-readout">Ready</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <aside class="control-rack">
+            <div class="deck-controls" aria-label="DJ controls">
+              <button id="previous-btn" class="icon-button" aria-label="Previous track">Prev</button>
+              <button id="play-btn" class="play-button" aria-label="Play or pause">Play</button>
+              <button id="next-btn" class="icon-button" aria-label="Next track">Next</button>
+              <button id="hype-btn" class="hype-button" aria-label="Hype moment">Hype</button>
+            </div>
+
+            <div class="card sliders control-card">
+              <label>
+                <span>Party energy</span>
+                <input id="energy-slider" type="range" min="0" max="100" value="52">
+              </label>
+              <label>
+                <span>Crossfade seconds</span>
+                <input id="crossfade-slider" type="range" min="0" max="12" value="5">
+              </label>
+              <label class="switch-row">
+                <span>Auto DJ flow</span>
+                <input id="autodj-toggle" type="checkbox" checked>
+              </label>
+            </div>
+
+            <div class="card import-card">
+              <div class="card-head">
+                <div>
+                  <p class="eyebrow">Playlist</p>
+                  <h2>Bring music in</h2>
+                </div>
+              </div>
+              <label class="drop-zone" id="drop-zone">
+                <input id="file-input" type="file" accept="audio/*" multiple>
+                <span>Drop audio files or choose tracks</span>
+              </label>
+              <label class="secondary-import">
+                <input id="folder-input" type="file" accept="audio/*" webkitdirectory multiple>
+                <span>Choose a music folder</span>
+              </label>
+            </div>
+
+            <div class="card search-card music-search">
+              <div class="card-head">
+                <div>
+                  <p class="eyebrow">Find Music</p>
+                  <h2>Search downloads</h2>
+                </div>
+              </div>
+              <form class="search-form">
+                <input class="search-input" type="search" placeholder="Song, artist, vibe" autocomplete="off">
+                <button class="search-button" type="submit">Search</button>
+              </form>
+              <p class="search-status">Open audio collections, saved locally.</p>
+              <div class="search-results"></div>
+            </div>
+
+            <div class="card qr-card">
+              <div class="qr-wrap">
+                <img id="qr-code" alt="Phone remote QR code">
+              </div>
+              <div>
+                <p class="eyebrow">Phone Remote</p>
+                <p id="remote-url" class="remote-url">Starting local link...</p>
+              </div>
+            </div>
+          </aside>
+        </section>
+
+        <section id="remote-view" class="remote-view" hidden>
+          <div class="phone-now">
+            <p class="eyebrow">Now Playing</p>
+            <h2 id="remote-track-title">Waiting for the Mac</h2>
+            <p id="remote-track-meta">Open the booth on your Mac and load music.</p>
+            <div class="meter-row">
+              <span id="remote-elapsed">0:00</span>
+              <div class="progress-shell">
+                <div id="remote-progress" class="progress-bar"></div>
+              </div>
+              <span id="remote-duration">0:00</span>
+            </div>
+          </div>
+
+          <div class="remote-pad">
+            <button data-command="previous" class="remote-button">Prev</button>
+            <button data-command="playPause" class="remote-button primary">Play</button>
+            <button data-command="next" class="remote-button">Next</button>
+            <button data-command="hype" class="remote-button hot">Hype</button>
+          </div>
+
+          <div class="remote-card music-search">
+            <div class="section-title">
+              <div>
+                <p class="eyebrow">Find Music</p>
+                <h2>Download locally</h2>
+              </div>
+            </div>
+            <form class="search-form">
+              <input class="search-input" type="search" placeholder="Song, artist, vibe" autocomplete="off">
+              <button class="search-button" type="submit">Search</button>
+            </form>
+            <p class="search-status">Open audio sources only.</p>
+            <div class="search-results"></div>
+          </div>
+
+          <div class="remote-card">
+            <label>
+              <span>Energy</span>
+              <input id="remote-energy" type="range" min="0" max="100" value="52">
+            </label>
+            <label>
+              <span>Crossfade</span>
+              <input id="remote-crossfade" type="range" min="0" max="12" value="5">
+            </label>
+          </div>
+
+          <div class="remote-card">
+            <div class="section-title">
+              <p class="eyebrow">Queue</p>
+              <span id="remote-queue-count">0 tracks</span>
+            </div>
+            <div id="remote-queue" class="remote-queue"></div>
+          </div>
+        </section>
+
+        <section class="queue-panel">
+          <div class="section-title">
+            <div>
+              <p class="eyebrow">Live Queue</p>
+              <h2>Tonight's flow</h2>
+            </div>
+            <span id="queue-count">0 tracks</span>
+          </div>
+          <div id="queue-list" class="queue-list"></div>
+        </section>
+      </section>
+    </main>
+
+    <audio id="deck-a" preload="metadata"></audio>
+    <audio id="deck-b" preload="metadata"></audio>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
