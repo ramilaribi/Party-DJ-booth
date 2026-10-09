@@ -38,6 +38,7 @@ Check:
 - Speaker volume is strong but not distorted.
 - Next and previous work from the phone.
 - Crossfade works.
+- Crossfade still works with the booth hidden: put another window in front during a fade and listen for the next song coming in.
 - The QR code opens the remote.
 - The Mac does not sleep.
 
@@ -52,7 +53,9 @@ Recommended Mac settings:
 
 Start around energy 40-55. Move toward 75-90 when people are dancing.
 
-Use Auto DJ when the room is moving well. Use Cue from the phone when you know the next song should be specific.
+Use Auto DJ when the room is moving well. It plays every track once before repeating, so load enough music to cover the night.
+
+Use Cue from the phone when a specific song should play right now. It crossfades straight into that song.
 
 Use votes as a signal, not a command. If a song gets votes but would kill the room, leave it for later.
 

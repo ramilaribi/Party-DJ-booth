@@ -10,6 +10,18 @@ Party DJ Booth is a local-first party music web app built for one personal setup
 - The app can search legal open-audio sources and download tracks locally into the project.
 - The experience is designed as a premium private party control room, not a public streaming platform.
 
+Repository:
+
+```text
+https://github.com/ramilaribi/Party-DJ-booth   (public, branch main)
+```
+
+Local checkout:
+
+```text
+/Users/macbook/Desktop/party-dj-booth
+```
+
 Current local app URL:
 
 ```text
@@ -49,6 +61,36 @@ Validation already run:
 - JS selector check
 - Live server CSS/HTML smoke checks
 
+Fixed on 2026-10-09:
+
+- **Auto DJ repeated two songs.** It only excluded the current track, so with similar energy tags it alternated between the same two songs forever. Tracks now count their plays, and Auto DJ picks from the least-played ones, so every track plays once before any repeats. Prev now uses the real play history instead of list order.
+- **Crossfades froze in hidden tabs.** Fades ran on `requestAnimationFrame`, which stops when the tab is hidden or the screen sleeps. The booth then went silent and ignored Next. Fades are now scheduled on the `AudioContext` clock.
+
+How the fixes were verified:
+
+- Both bugs were reproduced first on the original code, in a separate test copy with six silent test tracks.
+- With animation frames disabled for the whole run, Auto DJ played all six tracks in a full round and started a second one.
+- Prev stepped back through the real play history.
+- Instant cuts worked at crossfade 0.
+- An offline Web Audio render confirmed the fade curves and final gains.
+
+Not verified yet: real music on real speakers. Do the hidden-window crossfade check in [docs/WEEKEND_RUNBOOK.md](docs/WEEKEND_RUNBOOK.md) before the party.
+
+## Known Issues
+
+Found in the 2026-10-09 code review and not fixed yet, most important first:
+
+1. **Energy tags can be wiped.** `saveTrackPrefs` rebuilds saved tags from only the tracks loaded this session, so tags for any other track are deleted. Downloaded tracks never read their saved tags back.
+2. **Session code is never checked.** The code in the QR link is generated but not verified, so any device on the Wi-Fi can control the booth and trigger downloads.
+3. **Any socket can overwrite party state.** `display:state` is accepted without checking the sender's role, and Socket.IO allows any origin (`cors: { origin: true }`).
+4. **Open-audio boundary is not enforced on download.** The search query is not wrapped in parentheses, so words like `OR` can escape the collection filter. `/api/download` accepts any Internet Archive identifier.
+5. **Phone count drifts after reconnects.** Clients register once at page load and do not register again after Socket.IO reconnects.
+6. **Cue plays immediately.** It jumps to the song instead of queueing it next. The docs now describe this behavior; decide whether a real "play next" action is wanted.
+7. **Large libraries are slow.** Each imported file triggers a full queue re-render and a full playlist broadcast. The whole playlist is also resent every 700 ms.
+8. **Two booth tabs both play.** Every remote command reaches every open booth tab.
+9. **Remote sliders jump while dragging.** Incoming state resets the phone's slider values mid-drag.
+10. **Download leftovers.** A failed download leaves a `.download` temp file. Parallel downloads of the same file share one temp path.
+
 ## Important Boundary
 
 The app must not become a copyrighted music ripper.
@@ -57,13 +99,16 @@ The current search/download feature is intentionally scoped to legal open-audio 
 
 ## How To Run
 
-From the project folder:
+Requires Node.js 18 or newer.
 
 ```bash
-cd /Users/macbook/Documents/Codex/2026-10-09/can-x20/outputs/party-dj-booth
+git clone https://github.com/ramilaribi/Party-DJ-booth.git
+cd Party-DJ-booth
 npm install
 npm start
 ```
+
+The existing local checkout is at `/Users/macbook/Desktop/party-dj-booth`.
 
 Then open:
 
@@ -150,7 +195,9 @@ Important limitation:
 
 ## Recommended Next Dev Task
 
-Build a PWA install mode:
+Before new features, fix Known Issues 2–4 (who can control the booth and what it can download), then issue 1.
+
+Then build a PWA install mode:
 
 - Add `public/manifest.webmanifest`.
 - Add app icons.
@@ -177,36 +224,39 @@ Save the project, but do not make it available for all users and sessions on thi
 Make it visible only for team/dev Brama.
 ```
 
-Current local state:
+Current state:
 
-- The project is local only.
-- It has not been published.
-- It is saved under:
-
-```text
-/Users/macbook/Documents/Codex/2026-10-09/can-x20/outputs/party-dj-booth
-```
+- The source code was pushed to a **public** GitHub repository on 2026-10-09 at the owner's request: <https://github.com/ramilaribi/Party-DJ-booth>.
+- Downloaded music (`music-downloads/`) and its manifest (`.music-library.json`) are gitignored and stay on the Mac.
+- The local checkout is at `/Users/macbook/Desktop/party-dj-booth`, inside the owner's private Desktop folder.
+- The app itself still runs only on the local network; nothing is deployed to a server.
 
 Recommended access policy:
 
-- Do not deploy publicly.
-- Do not move into a shared public folder.
 - Keep downloaded music ignored and local.
-- If a real `brama` macOS group exists, assign the project to that group and use group-only permissions.
+- Do not deploy the app to a public server.
+- To limit the code to the Brama team, make the repository private and add team members as collaborators:
+
+```bash
+gh repo edit ramilaribi/Party-DJ-booth --visibility private --accept-visibility-change-consequences
+```
+
+- If a real `brama` macOS group exists, assign the local checkout to that group and use group-only permissions.
 - If no group exists, keep handoff files private to the current macOS user.
 
 Suggested macOS permission model for a real team group:
 
 ```bash
-chgrp -R brama /Users/macbook/Documents/Codex/2026-10-09/can-x20/outputs/party-dj-booth
-chmod -R o-rwx /Users/macbook/Documents/Codex/2026-10-09/can-x20/outputs/party-dj-booth
-chmod -R g+rwX /Users/macbook/Documents/Codex/2026-10-09/can-x20/outputs/party-dj-booth
+chgrp -R brama /Users/macbook/Desktop/party-dj-booth
+chmod -R o-rwx /Users/macbook/Desktop/party-dj-booth
+chmod -R g+rwX /Users/macbook/Desktop/party-dj-booth
 ```
 
 Do not run this unless the `brama` group exists and is the intended team group.
 
 ## Current Open Questions
 
+- Should the GitHub repository stay public, or become private for the Brama team?
 - Is `Brama` an actual macOS group, a company/team name, or a project label?
 - Should the future PWA be named `Brama Booth`, `Party DJ Booth`, or something more personal?
 - Should guests ever get a vote-only page separate from the DJ remote?
