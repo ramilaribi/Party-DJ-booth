@@ -1,4 +1,5 @@
 import express from "express";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -12,17 +13,22 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const port = Number(process.env.PORT || 4242);
 const maxDownloadBytes = 60 * 1024 * 1024;
+const openAudioFilter = [
+  "mediatype:audio",
+  "(collection:opensource_audio OR collection:netlabels OR collection:etree)",
+  "NOT collection:stream_only",
+].join(" AND ");
+const loopbackAddresses = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+const loopbackHosts = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: true },
-});
+const io = new Server(server);
 
 const publicDir = path.join(__dirname, "public");
 const downloadsDir = path.join(__dirname, "music-downloads");
 const libraryFile = path.join(__dirname, ".music-library.json");
-const sessionCode = Math.random().toString(36).slice(2, 8).toUpperCase();
+const sessionCode = crypto.randomBytes(6).toString("base64url");
 
 await fs.promises.mkdir(downloadsDir, { recursive: true });
 
@@ -73,6 +79,78 @@ function remoteBaseUrl(req) {
   const lanAddress = getLanAddress();
   const portPart = host.includes(":") ? `:${host.split(":").at(-1)}` : "";
   return `http://${lanAddress}${portPart}`;
+}
+
+function hostName(hostHeader) {
+  try {
+    return new URL(`http://${hostHeader}`).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+// Browsers send Origin on cross-site requests and on every WebSocket handshake.
+function isSameOrigin(headers) {
+  if (!headers.origin) return true;
+  try {
+    return new URL(headers.origin).host === headers.host;
+  } catch {
+    return false;
+  }
+}
+
+// The booth is a browser on this Mac at localhost. Checking the Host header as well as the
+// address stops a DNS-rebinding web page from posing as the booth.
+function isBooth(address, headers) {
+  return loopbackAddresses.has(address) && loopbackHosts.has(hostName(headers.host)) && isSameOrigin(headers);
+}
+
+function isPairedRemote(code, headers) {
+  const given = Buffer.from(String(code || ""));
+  const expected = Buffer.from(sessionCode);
+  return given.length === expected.length && crypto.timingSafeEqual(given, expected) && isSameOrigin(headers);
+}
+
+function requireBooth(req, res, next) {
+  if (isBooth(req.socket.remoteAddress, req.headers)) {
+    next();
+    return;
+  }
+  res.status(403).json({ error: "This only works on the Mac running the booth." });
+}
+
+function requirePairing(req, res, next) {
+  if (isBooth(req.socket.remoteAddress, req.headers) || isPairedRemote(req.get("x-party-session"), req.headers)) {
+    next();
+    return;
+  }
+  res.status(403).json({ error: "This remote link is out of date. Scan the QR code on the Mac again." });
+}
+
+function openAudioSearchUrl(clause, rows) {
+  const url = new URL("https://archive.org/advancedsearch.php");
+  // Parentheses keep words like OR in the clause from escaping the collection filter.
+  url.searchParams.set("q", `(${clause}) AND ${openAudioFilter}`);
+  ["identifier", "title", "creator", "date", "licenseurl", "downloads"].forEach((field) => {
+    url.searchParams.append("fl[]", field);
+  });
+  url.searchParams.append("sort[]", "downloads desc");
+  url.searchParams.set("rows", String(rows));
+  url.searchParams.set("page", "1");
+  url.searchParams.set("output", "json");
+  return url;
+}
+
+async function isOpenAudioItem(identifier) {
+  const response = await fetch(openAudioSearchUrl(`identifier:"${identifier}"`, 1), {
+    headers: { "User-Agent": "PartyDJBooth/1.0 local music download" },
+    signal: AbortSignal.timeout(12000),
+  });
+
+  if (!response.ok) throw new Error(`Collection check failed: ${response.status}`);
+
+  const data = await response.json();
+  return Number(data.response?.numFound || 0) > 0;
 }
 
 function cleanSearchTerm(value) {
@@ -179,14 +257,14 @@ app.use(express.static(publicDir, {
   },
 }));
 app.use(express.json({ limit: "1mb" }));
-app.use("/music", express.static(downloadsDir, {
+app.use("/music", requireBooth, express.static(downloadsDir, {
   maxAge: "1d",
   setHeaders(res) {
     res.setHeader("Accept-Ranges", "bytes");
   },
 }));
 
-app.get("/api/session", async (req, res) => {
+app.get("/api/session", requireBooth, async (req, res) => {
   const origin = baseUrl(req);
   const remoteUrl = `${remoteBaseUrl(req)}/?remote=1&session=${sessionCode}`;
   const qrDataUrl = await QRCode.toDataURL(remoteUrl, {
@@ -207,11 +285,11 @@ app.get("/api/session", async (req, res) => {
   });
 });
 
-app.get("/api/downloads", async (req, res) => {
+app.get("/api/downloads", requireBooth, async (req, res) => {
   res.json({ tracks: await downloadableLibraryTracks() });
 });
 
-app.get("/api/search", async (req, res) => {
+app.get("/api/search", requirePairing, async (req, res) => {
   const query = cleanSearchTerm(req.query.q);
 
   if (query.length < 2) {
@@ -219,21 +297,8 @@ app.get("/api/search", async (req, res) => {
     return;
   }
 
-  const searchUrl = new URL("https://archive.org/advancedsearch.php");
-  searchUrl.searchParams.set(
-    "q",
-    `${query} AND mediatype:audio AND (collection:opensource_audio OR collection:netlabels OR collection:etree)`,
-  );
-  ["identifier", "title", "creator", "date", "licenseurl", "downloads"].forEach((field) => {
-    searchUrl.searchParams.append("fl[]", field);
-  });
-  searchUrl.searchParams.append("sort[]", "downloads desc");
-  searchUrl.searchParams.set("rows", "10");
-  searchUrl.searchParams.set("page", "1");
-  searchUrl.searchParams.set("output", "json");
-
   try {
-    const response = await fetch(searchUrl, {
+    const response = await fetch(openAudioSearchUrl(query, 10), {
       headers: { "User-Agent": "PartyDJBooth/1.0 local music search" },
       signal: AbortSignal.timeout(12000),
     });
@@ -260,7 +325,7 @@ app.get("/api/search", async (req, res) => {
   }
 });
 
-app.post("/api/download", async (req, res) => {
+app.post("/api/download", requirePairing, async (req, res) => {
   const identifier = cleanIdentifier(req.body?.identifier);
 
   if (!identifier) {
@@ -269,6 +334,12 @@ app.post("/api/download", async (req, res) => {
   }
 
   try {
+    // Only download what search can return: open audio collections, nothing stream-only.
+    if (!(await isOpenAudioItem(identifier))) {
+      res.status(403).json({ error: "This item is not in the open audio collections, so it can't be downloaded." });
+      return;
+    }
+
     const metadataResponse = await fetch(`https://archive.org/metadata/${encodeURIComponent(identifier)}`, {
       headers: { "User-Agent": "PartyDJBooth/1.0 local music download" },
       signal: AbortSignal.timeout(12000),
@@ -342,8 +413,8 @@ function updatePresence() {
   let displays = 0;
   let remotes = 0;
 
-  // Count live sockets instead of keeping running totals, so reconnects and repeat
-  // registrations can't push the numbers out of sync.
+  // Count live sockets instead of keeping running totals, so reconnects can't push the
+  // numbers out of sync.
   for (const client of io.of("/").sockets.values()) {
     if (client.data.role === "display") displays += 1;
     if (client.data.role === "remote") remotes += 1;
@@ -354,16 +425,36 @@ function updatePresence() {
   io.emit("presence", { displays, remotes });
 }
 
+// Every connection declares its role in the handshake, and every reconnect repeats it.
+// The booth must be this Mac at localhost; a phone must carry the session code from the QR link.
+io.use((socket, next) => {
+  const { role, session } = socket.handshake.auth || {};
+  const { address, headers } = socket.handshake;
+  const booth = isBooth(address, headers);
+
+  if (role === "display" && booth) {
+    socket.data.role = "display";
+    next();
+    return;
+  }
+
+  if (role === "remote" && (booth || isPairedRemote(session, headers))) {
+    socket.data.role = "remote";
+    next();
+    return;
+  }
+
+  next(new Error("not-authorized"));
+});
+
 io.on("connection", (socket) => {
+  updatePresence();
   socket.emit("state", partyState);
 
-  socket.on("register", (payload = {}) => {
-    socket.data.role = payload.role === "remote" ? "remote" : "display";
-    updatePresence();
-    socket.emit("state", partyState);
-  });
-
   socket.on("display:state", (incoming = {}) => {
+    // Only the booth owns playback state; phones change it by sending commands.
+    if (socket.data.role !== "display") return;
+
     partyState = {
       ...partyState,
       ...incoming,
@@ -391,7 +482,7 @@ server.listen(port, "0.0.0.0", () => {
   console.log("");
   console.log("Party DJ Booth is running.");
   console.log(`Mac player:  http://localhost:${port}`);
-  console.log(`Phone remote: http://${lanAddress}:${port}/?remote=1`);
+  console.log(`Phone remote: http://${lanAddress}:${port}/?remote=1&session=${sessionCode}`);
   console.log("");
   console.log("Keep this server running while the party is active.");
 });

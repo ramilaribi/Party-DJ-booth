@@ -1,6 +1,10 @@
 const params = new URLSearchParams(window.location.search);
 const isRemote = params.has("remote") || params.get("role") === "remote";
-const socket = window.io();
+const sessionCode = params.get("session") || "";
+const socket = window.io({
+  // Sent on every connect and reconnect; the server checks it before accepting the socket.
+  auth: { role: isRemote ? "remote" : "display", session: sessionCode },
+});
 
 const els = {
   shell: document.querySelector(".app-shell"),
@@ -114,9 +118,21 @@ function boot() {
 
 function bindSocket() {
   socket.on("connect", () => {
-    // Register on every connect: after a reconnect the server sees a new socket with no role.
-    socket.emit("register", { role: isRemote ? "remote" : "display" });
     els.connectionPill.textContent = isRemote ? "Remote linked" : "Booth live";
+  });
+
+  socket.on("connect_error", (error) => {
+    if (error.message !== "not-authorized") return;
+    els.connectionPill.textContent = "Not linked";
+
+    if (isRemote) {
+      els.remoteTrackTitle.textContent = "Scan the QR code again";
+      els.remoteTrackMeta.textContent = "This remote link is missing or out of date. Scan the QR code on the Mac booth to reconnect.";
+    } else {
+      const port = window.location.port ? `:${window.location.port}` : "";
+      els.trackTitle.textContent = "Open the booth on the Mac";
+      els.trackMeta.textContent = `The booth only runs on the Mac running the server, at http://localhost${port}.`;
+    }
   });
 
   socket.on("disconnect", () => {
@@ -227,7 +243,7 @@ function bindSearchControls() {
       results.replaceChildren();
 
       try {
-        const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const response = await apiFetch(`/api/search?q=${encodeURIComponent(query)}`);
         const payload = await response.json();
 
         if (!response.ok) throw new Error(payload.error || "Search failed.");
@@ -275,6 +291,11 @@ async function loadDownloadedTracks() {
   } catch {
     // The booth still works without the saved download library.
   }
+}
+
+function apiFetch(url, options = {}) {
+  // Phones prove they were paired by the QR code; the booth on the Mac needs no code.
+  return fetch(url, { ...options, headers: { ...options.headers, "X-Party-Session": sessionCode } });
 }
 
 function sendCommand(command) {
@@ -827,7 +848,7 @@ async function downloadSearchResult(section, result, button) {
   status.textContent = "Downloading to this Mac...";
 
   try {
-    const response = await fetch("/api/download", {
+    const response = await apiFetch("/api/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(result),
