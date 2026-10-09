@@ -50,6 +50,7 @@ Built and verified:
 - Phone remote controls.
 - Energy slider and Auto DJ flow.
 - Search and local download from open audio collections.
+- YouTube search and play (added 2026-10-09, see below).
 - Private club-style UI redesign.
 - Documentation and weekend runbook.
 
@@ -100,6 +101,9 @@ Found in the 2026-10-09 code review and not fixed yet, most important first:
 4. **Remote sliders jump while dragging.** Incoming state resets the phone's slider values mid-drag.
 5. **Download leftovers.** A failed download leaves a `.download` temp file. Parallel downloads of the same file share one temp path.
 6. **Pairing ends when the server restarts.** The session code is regenerated on every start, so phones must scan the QR code again. This is safer, but an installed PWA would need a way to keep or renew pairing.
+7. **YouTube-to-YouTube is a dip, not an overlap.** One player can't overlap two videos. A second YouTube player would allow a real crossfade, but both would need to stay visible while they play.
+8. **No visualizer or EQ on YouTube tracks.** Their audio stays inside YouTube's cross-origin player and can't reach Web Audio.
+9. **A YouTube start can't be retried mid-transition.** A video that times out while starting is skipped for this round and retried in the next one.
 
 ## Important Boundary
 
@@ -208,6 +212,32 @@ Important limitation:
 ## Recommended Next Dev Task
 
 The network-safety issues from the code review are fixed.
+
+**Done on 2026-10-09: YouTube search and play.** The owner asked for YouTube search, play, and download. Download was declined: it breaks YouTube's Terms of Service, usually copyright, and the Important Boundary above. Search and play use the official YouTube Data API v3 and IFrame player:
+
+- `/api/youtube/search` on the server, with the key read from `.env` (gitignored, mode 600) and pairing required.
+- Three decks with one interface: two audio decks and a YouTube deck. Crossfades work between any of them, with a fade-out / fade-in dip for YouTube-to-YouTube. See Decks in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- Find Music has an Open audio / YouTube switch on the Mac and the phone, with Play now and Add to queue.
+- Failure handling: player and start timeouts, refused videos skipped with a reason, Cue / Play now held until a running crossfade ends, and an ad-length guard for Auto DJ.
+
+How it was verified:
+
+- The search endpoint was tested against a mock of the YouTube Data API: results, durations, live streams dropped, missing key, invalid key, quota used up, too-short query, and pairing required. It was also tested once against the real API with the owner's key.
+- In the booth, with the browser pane visible: a real search, Play now playing with sound (volume 100, time advancing in step with the booth), a YouTube-to-YouTube switch that loads the new video and fades back in, local to YouTube and YouTube to local crossfades with smooth volume ramps, pause, and the video shown above the overlay with no overlap.
+- A video YouTube refuses in the test browser was skipped with its reason, and a video that couldn't start was skipped after 10 seconds without Auto DJ retrying it in a loop.
+- Adding a video from the phone put it in the booth queue. The 16 network-safety checks still pass.
+
+Bugs found and fixed while testing:
+
+- Cue and Play now were silently dropped during a crossfade.
+- Cueing then playing made YouTube fail with error 2 or stay cued.
+- A YouTube-to-YouTube switch kept playing the old video.
+- A failed YouTube video stayed on screen.
+- Auto DJ retried a failing video every 10 seconds.
+
+Not verified yet: a full party-length session, ads in practice, and the phone remote on a real phone.
+
+Owner's chosen order for what's next: voice control on the Mac and phone (the phone needs HTTPS for the microphone), then DJ mixing.
 
 On 2026-10-09 the owner asked for bigger features: YouTube search and playback, DJ mixing, and voice control. Their scope and order are still being agreed, so check with the owner before starting. Downloading from YouTube stays out of scope under the Important Boundary above.
 

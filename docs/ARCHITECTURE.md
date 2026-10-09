@@ -12,12 +12,14 @@ Mac terminal
     QR code generation
     Internet Archive open-audio search
     local music download library
+    YouTube Data API search (key from .env)
 
 Mac browser
   public/app.js
     local audio file import
     Web Audio graph
-    two-deck crossfade
+    two audio decks + a YouTube deck (IFrame player)
+    crossfades between any two decks
     visualizer canvas
     queue state
     remote command handler
@@ -46,6 +48,8 @@ The phone receives metadata only:
 The phone never receives the audio file itself.
 
 Downloaded search results are different: the server downloads them into `music-downloads/` on the Mac, serves them from `/music/...`, and then the Mac booth adds that local URL to the live queue.
+
+YouTube tracks are streamed, never stored. The booth plays them through YouTube's embedded player, and the phone only sends the video's ID, title, channel, and length.
 
 ## Realtime Flow
 
@@ -80,6 +84,7 @@ The server trusts two kinds of clients.
 | Socket as `display`, `display:state` | yes | no | no |
 | Socket as `remote`, `remote:command` | yes | yes | no |
 | `GET /api/search`, `POST /api/download` | yes | yes | no |
+| `GET /api/youtube/search` | yes | yes | no |
 | `GET /api/session` (QR code and session code) | yes | no | no |
 | `GET /api/downloads`, `/music/*` | yes | no | no |
 
@@ -97,33 +102,51 @@ AND NOT collection:stream_only
 
 The user's search text is wrapped in parentheses before the filter is added. Before downloading, the server runs the same filtered search for `identifier:"<id>"` and refuses the download unless the item is found. So anything search can show can be downloaded, and nothing else.
 
-## Audio Graph
+YouTube is outside this boundary on purpose: it is search and play only. `/api/youtube/search` calls the YouTube Data API v3 with the key from `.env` (`search.list` with `type=video` and `videoEmbeddable=true`, then `videos.list` for lengths). It drops live streams and returns video IDs for the official player. Nothing from YouTube is downloaded.
 
-The Mac uses two audio elements:
+## Decks
 
-- Deck A
-- Deck B
+The booth has three decks with the same interface (`load`, `play`, `pause`, `stop`, `setLevel`, `fade`, `currentTime`, `duration`):
 
-When crossfading:
+- **Deck A** and **Deck B**: `<audio>` elements for local files and downloads.
+- **YouTube**: one YouTube IFrame player, shown at the top of the stage while it holds a video.
 
-1. Current deck continues playing.
-2. Next deck loads the target song.
-3. Next deck starts at volume 0.
-4. Both gain curves are scheduled on the `AudioContext` clock with `setValueCurveAtTime`, using a smoothstep shape over the crossfade length.
-5. A timer fires when the fade ends, pins the final gains, and stops the old deck.
-6. Active deck switches.
+`deckFor(track)` picks the YouTube deck for YouTube tracks, and otherwise the audio deck that isn't playing, so the two can overlap.
 
-The fade runs on the audio clock instead of `requestAnimationFrame`. Browsers stop animation frames when the tab is hidden or the screen sleeps, which used to freeze the fade halfway and lock out every later transition.
+### Audio decks
 
-Every direct gain change goes through `setDeckGain`, which clears leftover fade automation first. In Web Audio, setting a value inside a scheduled curve's time range throws `NotSupportedError`.
-
-Both decks route through:
+Both route through:
 
 ```text
 MediaElementSource -> GainNode -> AnalyserNode -> speakers
 ```
 
-The `AnalyserNode` drives the canvas visualizer.
+The `AnalyserNode` drives the canvas visualizer. Fades are scheduled on the `AudioContext` clock with `setValueCurveAtTime`, using a smoothstep shape over the crossfade length. Before any direct gain change, `setLevel` clears leftover fade automation, because in Web Audio setting a value inside a scheduled curve's time range throws `NotSupportedError`.
+
+### YouTube deck
+
+- YouTube audio plays inside YouTube's cross-origin player, so it never reaches the analyser. The visualizer shows its idle animation while YouTube plays.
+- Fades step the player's volume (`setVolume`, 0–100) every 50 ms along the same smoothstep curve.
+- A new video starts with `loadVideoById`. Never cue a video and then call `playVideo` right away: YouTube either fails with error 2 or stays cued. `cueVideoById` is only used to show a preview while the booth is paused.
+- The player has no `timeupdate` event, so the deck polls it every 500 ms while it plays.
+- YouTube's rules forbid covering the player, so while a video shows, the stage overlay moves below it (`.stage.has-video`).
+
+### Transitions
+
+| From → to | How |
+| --- | --- |
+| Audio → audio | Overlap crossfade on the audio clock |
+| Audio ↔ YouTube | Overlap crossfade: audio clock on one side, volume steps on the other |
+| YouTube → YouTube | Dip: fade out over half the crossfade, load the next video, fade in over the other half (one player can't overlap two videos) |
+
+A timer, never `requestAnimationFrame`, ends every fade and pins the final levels. Browsers stop animation frames when the tab is hidden or the screen sleeps, which used to freeze fades halfway and lock out every later transition.
+
+### When something fails
+
+- **Player never gets ready** (no internet, blocked): `withTimeout` gives up after 20 seconds with a message, and the next attempt builds a fresh player.
+- **Video doesn't start within 10 seconds**: the transition fails. In an overlap, the old deck keeps playing, the failed deck is stopped, and the booth and Prev point back at the playing track. The failed track keeps its play count, so Auto DJ tries other songs before retrying it.
+- **YouTube refuses a video** (`onError`: removed, private, or not allowed outside YouTube): the track is marked `unplayable`, the booth shows why, and Auto DJ and Next skip it from then on.
+- **Cue or Play now during a crossfade**: kept in `pendingCue` and played as soon as the crossfade ends, instead of being dropped.
 
 ## Auto DJ
 
@@ -140,7 +163,11 @@ That keeps the room near the current energy mode and lets crowd votes move songs
 
 With Auto DJ off, or with fewer than three tracks, songs play in list order.
 
+Tracks marked `unplayable` are skipped in both modes.
+
 Auto DJ starts the crossfade when the remaining time drops to the crossfade length. In manual mode, the next song starts when the current one ends.
+
+For YouTube tracks, Auto DJ only trusts the player's reported length when it is within 5 seconds of the length search returned. During an ad, the player can report the ad's length, which would otherwise start the next song early.
 
 ## Play History
 
@@ -171,6 +198,7 @@ Playlist files are not stored permanently. You choose them again when you start 
 - Prints Mac and phone URLs.
 - Generates the QR code.
 - Searches Internet Archive open audio collections.
+- Searches YouTube with the API key from `.env`, so the key never reaches a browser.
 - Downloads selected audio files into `music-downloads/`.
 - Keeps a small `.music-library.json` manifest.
 - Keeps the latest public booth state in memory.
@@ -181,9 +209,9 @@ Playlist files are not stored permanently. You choose them again when you start 
 
 - Detects Mac booth vs phone remote from URL params.
 - Handles file import.
-- Handles music search and download actions.
-- Controls playback.
-- Runs crossfades.
+- Handles music search (open audio and YouTube), downloads, and YouTube queueing.
+- Controls playback through the deck interface.
+- Runs crossfades and YouTube dips.
 - Draws the visualizer.
 - Renders booth and remote screens.
 - Syncs state over Socket.IO.
@@ -197,6 +225,8 @@ Playlist files are not stored permanently. You choose them again when you start 
 ## Known Browser Limitation
 
 A remote command from the phone may not be allowed to start audio until the Mac page has received a direct user gesture. Press Play once on the Mac after loading music. This unlocks the audio session for the rest of the party.
+
+YouTube has a second limit: a browser tab that has never been on screen cannot start a video with sound. The video stays "unstarted", and the booth skips it after 10 seconds. Open the booth in a visible window. Once it has been on screen, videos also start while the window is in the background.
 
 ## Future Upgrade Ideas
 

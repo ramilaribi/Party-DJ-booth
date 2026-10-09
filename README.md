@@ -12,8 +12,9 @@ The app does not upload your music anywhere. The browser reads the audio files y
 ## Requirements
 
 - macOS with a modern browser (Chrome or Safari).
-- Node.js 18 or newer.
+- Node.js 18 or newer (20.12 or newer to read the YouTube key from `.env`).
 - Mac and phone on the same Wi-Fi network.
+- Optional: a free YouTube Data API key for YouTube search (see [YouTube Search And Play](#youtube-search-and-play)).
 
 ## Quick Start
 
@@ -42,10 +43,11 @@ The Mac booth has:
 
 - Local music import for audio files and folders.
 - Legal music search from open audio collections, with one-click local downloads.
+- YouTube search and play through YouTube's official player, with the video on the stage.
 - Full-screen style now-playing stage with a canvas party visualizer.
 - Real audio playback in the browser.
 - Play, pause, previous, next, and hype controls.
-- Two-deck crossfade between tracks.
+- Crossfades between tracks, including between your files and YouTube.
 - Energy control and an Auto DJ that plays every track before repeating.
 - Queue with cue, vote, and energy tagging.
 - QR code for phone pairing.
@@ -54,6 +56,7 @@ The phone remote has:
 
 - Play, pause, previous, next, and hype controls.
 - Music search and download to the Mac.
+- YouTube search with Play now and Add to queue on the booth.
 - Energy and crossfade sliders.
 - Live now-playing progress.
 - Queue browsing with cue and vote actions.
@@ -98,6 +101,31 @@ The app accepts common browser-playable audio files:
 Apple Music or Spotify streaming playlists cannot be imported directly because those services do not expose raw audio files to a local browser app. Exported or downloaded local files work.
 
 Search quality depends on what the open audio collections contain.
+
+## YouTube Search And Play
+
+Switch the Find Music card to **YouTube** to search YouTube from the Mac or the phone. Each result has **Play now** and **Add to queue**. Videos play through YouTube's official player on the booth stage. Nothing from YouTube is ever downloaded.
+
+Setup, once:
+
+1. In [Google Cloud Console](https://console.cloud.google.com), create a project and enable **YouTube Data API v3**.
+2. Under **APIs & Services → Credentials**, create an API key. Restricting it to YouTube Data API v3 is recommended.
+3. Save it in the project folder (copy `.env.example` to `.env`, or run the command below), then restart the server:
+
+```bash
+printf 'YOUTUBE_API_KEY=%s\n' 'PASTE_YOUR_KEY_HERE' > .env
+```
+
+The terminal prints `YouTube search: on` when the key is loaded. Reading `.env` needs Node.js 20.12 or newer. On older versions, run `YOUTUBE_API_KEY=... npm start` instead. `.env` is gitignored, and the key stays on the Mac: phones search through the server.
+
+Good to know:
+
+- The free quota allows about 100 searches a day.
+- YouTube audio plays inside YouTube's player, so YouTube songs get no visualizer bars and no EQ.
+- Crossfades work between your files and YouTube in both directions. Going from one YouTube video to another fades out, switches, and fades back in.
+- Ads can appear, and some videos block playback outside YouTube. The booth skips a video that won't play and says why.
+- Open the booth in a visible window. Browsers block a video from starting with sound in a tab that has never been on screen.
+- If the terminal says `YouTube search: off`, the server didn't find the key. Check `.env` and restart the server.
 
 ## Party Controls
 
@@ -158,6 +186,7 @@ Try these checks:
 - **The booth only runs on the Mac.** Open it at `http://localhost:4242`. Opening the booth from another device, or through the Mac's network address, shows **Open the booth on the Mac**.
 - **Only the booth sets what is playing.** Phones send commands such as Next or Vote, and the booth decides.
 - **Other websites are shut out.** A web page open in the Mac's browser cannot connect to the booth or read the session code.
+- **Your YouTube key stays on the Mac.** Phones and the booth page search through the server, so the key never reaches a browser.
 
 Anyone you give the QR code or link to can control the booth until the server restarts. Run the booth on your own network or a personal hotspot, not on shared public Wi-Fi.
 
@@ -181,9 +210,10 @@ public/app.js             Player, queue, crossfade, Auto DJ, visualizer, remote 
 docs/WEEKEND_RUNBOOK.md   Practical party checklist
 docs/ARCHITECTURE.md      Technical structure
 PROJECT_HANDOFF.md        Project status, known issues, and next steps
+.env.example              Template for .env (YouTube API key)
 ```
 
-Downloaded tracks (`music-downloads/`) and their manifest (`.music-library.json`) stay on the Mac and are not committed.
+Downloaded tracks (`music-downloads/`), their manifest (`.music-library.json`), and your `.env` stay on the Mac and are not committed.
 
 ## Stop the App
 

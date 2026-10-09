@@ -24,6 +24,7 @@ http://localhost:4242
 8. Search and download any extra open-audio tracks you want ready.
 9. Press Play once on the Mac to unlock browser audio.
 10. Scan the QR code with your phone.
+11. If you plan to use YouTube, check the terminal says `YouTube search: on`. Queue the YouTube songs you already know you want.
 
 ## Sound Check
 
@@ -40,6 +41,8 @@ Check:
 - Crossfade works.
 - Crossfade still works with the booth hidden: put another window in front during a fade and listen for the next song coming in.
 - The QR code opens the remote.
+- A YouTube song plays with sound, and crossfades in and out of one of your own files.
+- YouTube volume sits close to your files. If YouTube is much louder or quieter, adjust the Mac volume for the mix you'll play most.
 - The Mac does not sleep.
 
 Recommended Mac settings:
@@ -59,7 +62,7 @@ Use Cue from the phone when a specific song should play right now. It crossfades
 
 Use votes as a signal, not a command. If a song gets votes but would kill the room, leave it for later.
 
-If someone asks for a song you do not have, use Find Music. It searches legal open audio collections and saves matching downloads locally on the Mac.
+If someone asks for a song you do not have, use Find Music. Open audio searches legal collections and saves matching downloads on the Mac. YouTube finds almost anything and plays it on the booth right away, but it needs internet and can show ads.
 
 ## Recovery Moves
 
@@ -68,6 +71,12 @@ If audio stops:
 1. Look at the Mac.
 2. Press Play on the Mac.
 3. If needed, refresh the Mac page and load the playlist again.
+
+If a YouTube song won't play:
+
+1. The booth skips it by itself and shows why (removed, private, or not allowed outside YouTube).
+2. If no YouTube song starts at all, check the internet connection, and make sure the booth window has been on screen since you opened it.
+3. If search says the daily limit is used up, use Open audio or your own files until midnight Pacific time.
 
 If the phone remote disconnects:
 
