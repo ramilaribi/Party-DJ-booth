@@ -1,3 +1,12 @@
+import {
+  beatPhase,
+  crossfaderGains,
+  detectBpm,
+  filterSetting,
+  matchRate,
+  phaseDifference,
+  timeForPhase,
+} from "./mixing.js";
 import { findQueuedTrack, parseVoiceCommand } from "./voice.js";
 
 const params = new URLSearchParams(window.location.search);
@@ -61,6 +70,13 @@ const els = {
   searchSections: document.querySelectorAll(".music-search"),
   stage: document.querySelector(".stage"),
   youtubeStage: document.querySelector("#youtube-stage"),
+  mixerPanel: document.querySelector(".mixer-panel"),
+  mixModeTabs: document.querySelectorAll("[data-mix-mode]"),
+  crossfader: document.querySelector("#crossfader"),
+  autoFadeBtn: document.querySelector("#auto-fade-btn"),
+  beatMatchToggle: document.querySelector("#beatmatch-toggle"),
+  mixerStatus: document.querySelector("#mixer-status"),
+  deckStripTemplate: document.querySelector("#deck-strip-template"),
 };
 
 const settingsKey = "party-dj-booth-settings";
@@ -100,6 +116,11 @@ let youtubeApi = null;
 let recognition = null;
 let isTransitioning = false;
 let pendingCue = null;
+let crossfaderTimer = 0;
+let manualBusy = false;
+let analysisQueue = Promise.resolve();
+const analysisJobs = new Map();
+const deckStrips = [];
 let renderTick = 0;
 let lastSync = 0;
 let remoteState = {};
@@ -117,6 +138,9 @@ const booth = {
   playing: false,
   volume: settings.volume ?? 100,
   mutedVolume: 0,
+  mixMode: settings.mixMode === "manual" ? "manual" : "auto",
+  beatMatch: settings.beatMatch ?? true,
+  crossfader: 0,
   energy: settings.energy,
   crossfade: settings.crossfade,
   autoDj: settings.autoDj,
@@ -139,6 +163,7 @@ function boot() {
   els.displayView.hidden = isRemote;
   els.remoteView.hidden = !isRemote;
   els.queuePanel.hidden = isRemote;
+  els.mixerPanel.hidden = isRemote;
 
   bindSocket();
   bindSearchControls();
@@ -148,6 +173,7 @@ function boot() {
     bindRemoteControls();
   } else {
     bindDisplayControls();
+    buildMixer();
     fetchSession();
     loadDownloadedTracks();
     applySettingsToInputs();
@@ -567,6 +593,16 @@ async function runVoiceCommand(text) {
   } else if (command.action === "autoDj") {
     setAutoDj(command.value);
     result = booth.autoDj ? "Auto DJ on" : "Auto DJ off";
+  } else if (command.action === "mixMode") {
+    setMixMode(command.value);
+    result = booth.mixMode === command.value ? `${command.value === "manual" ? "Manual" : "Auto"} mix` : els.mixerStatus.textContent;
+  } else if (command.action === "autoFade") {
+    if (booth.mixMode === "manual") {
+      result = (await autoFade()) ? "fading across" : els.mixerStatus.textContent;
+    } else {
+      nextTrack(true);
+      result = "next song";
+    }
   } else {
     result = await requestSong(command.query, command.action === "playSong");
   }
@@ -630,6 +666,8 @@ function addFiles(fileList) {
       duration: 0,
       url: URL.createObjectURL(file),
       energy: saved.energy ?? guessEnergy(file.name),
+      bpm: saved.bpm,
+      firstBeat: saved.firstBeat,
       votes: 0,
       plays: 0,
       addedAt: Date.now(),
@@ -668,6 +706,8 @@ function addDownloadedTrack(downloadedTrack, announce) {
     duration: 0,
     url: downloadedTrack.url,
     energy: saved.energy ?? downloadedTrack.energy ?? guessEnergy(`${title} ${artist}`),
+    bpm: saved.bpm,
+    firstBeat: saved.firstBeat,
     votes: 0,
     plays: 0,
     source: downloadedTrack.source || "Downloaded",
@@ -784,12 +824,25 @@ async function setupAudio() {
   analyser.smoothingTimeConstant = 0.78;
   analyserData = new Uint8Array(analyser.frequencyBinCount);
 
+  // Each audio deck is a mixer channel: 3-band EQ, then a sweep filter, then its fader.
   audioDecks.forEach((deck) => {
     deck.source = audioContext.createMediaElementSource(deck.el);
+    deck.eqNodes = {
+      low: new BiquadFilterNode(audioContext, { type: "lowshelf", frequency: 200, gain: deck.eq.low }),
+      mid: new BiquadFilterNode(audioContext, { type: "peaking", frequency: 1000, Q: 0.8, gain: deck.eq.mid }),
+      high: new BiquadFilterNode(audioContext, { type: "highshelf", frequency: 3500, gain: deck.eq.high }),
+    };
+    deck.filter = new BiquadFilterNode(audioContext, { Q: 1 });
+    applyFilter(deck.filter, deck.filterValue);
     deck.gain = audioContext.createGain();
-    deck.gain.gain.value = deck === activeDeck ? 1 : 0;
-    deck.source.connect(deck.gain);
-    deck.gain.connect(analyser);
+    deck.gain.gain.value = levelFor(deck);
+    deck.source
+      .connect(deck.eqNodes.low)
+      .connect(deck.eqNodes.mid)
+      .connect(deck.eqNodes.high)
+      .connect(deck.filter)
+      .connect(deck.gain)
+      .connect(analyser);
   });
 
   // Master volume sits after the analyser, so the visualizer keeps moving at low volume.
@@ -804,6 +857,13 @@ async function togglePlay() {
   if (!booth.tracks.length) {
     booth.message = "Load music first";
     renderDisplay();
+    return;
+  }
+
+  if (booth.mixMode === "manual") {
+    await manualToggle();
+    renderDisplay();
+    syncFromDisplay(true);
     return;
   }
 
@@ -854,6 +914,7 @@ async function loadTrack(index, shouldPlay, useFade) {
   booth.currentIndex = index;
   const remembered = rememberPlay(track);
   booth.message = `Loaded ${track.title}`;
+  ensureBpm(track);
 
   if (!canFade) {
     // Reuse the current deck when it plays this kind of track; otherwise switch decks.
@@ -863,7 +924,7 @@ async function loadTrack(index, shouldPlay, useFade) {
 
     try {
       await deck.load(track);
-      deck.setLevel(1);
+      deck.setLevel(levelFor(deck));
       if (shouldPlay) await playActive();
       else deck.preview?.();
     } catch (error) {
@@ -886,12 +947,22 @@ async function loadTrack(index, shouldPlay, useFade) {
       // One YouTube player can't overlap two videos, so fade out, switch, and fade back in.
       await dipDeck(currentDeck, track, booth.crossfade);
     } else {
+      // Freeze the outgoing deck's tempo (it may still be drifting back from the last mix).
+      window.clearInterval(currentDeck.tempoTimer);
       await nextDeck.load(track);
       nextDeck.setLevel(0);
+      const plan = booth.beatMatch ? beatMatchPlan(currentDeck, track) : null;
+      if (plan) {
+        nextDeck.setTempo(plan.rate);
+        nextDeck.currentTime = plan.startTime;
+      }
       await nextDeck.play();
+      if (plan) wait(0.25).then(() => alignBeats(nextDeck, currentDeck, plan));
       await fadeDecks(currentDeck, nextDeck, booth.crossfade);
       currentDeck.stop();
       activeDeck = nextDeck;
+      // After the mix, drift back to the song's own tempo slowly enough that nobody notices.
+      if (plan && plan.rate !== 1) easeTempo(nextDeck, 1, 8);
     }
     booth.playing = true;
     booth.message = `Now playing ${track.title}`;
@@ -931,6 +1002,10 @@ async function loadTrack(index, shouldPlay, useFade) {
 // Cue and Play now are what someone asked for, so a running crossfade delays them instead of
 // dropping them. Automatic transitions still just skip while a crossfade runs.
 function cueTrack(index, shouldPlay) {
+  if (booth.mixMode === "manual") {
+    manualPlay(index);
+    return;
+  }
   if (isTransitioning) {
     pendingCue = { index, shouldPlay };
     booth.message = `Up next: ${booth.tracks[index]?.title}`;
@@ -1005,8 +1080,20 @@ function createAudioDeck(el, label) {
     el,
     gain: null,
     source: null,
+    eqNodes: null,
+    filter: null,
+    track: null,
+    rate: 1,
+    keyLock: true,
+    eq: { low: 0, mid: 0, high: 0 },
+    filterValue: 0,
+    cue: null,
+    tempoTimer: 0,
     get loaded() {
       return Boolean(el.src);
+    },
+    get playing() {
+      return Boolean(el.src) && !el.paused;
     },
     get currentTime() {
       return el.currentTime || 0;
@@ -1021,6 +1108,10 @@ function createAudioDeck(el, label) {
       el.pause();
       el.src = track.url;
       el.currentTime = 0;
+      deck.track = track;
+      deck.cue = null;
+      // A new src resets the element's rate, so set the deck's tempo back to 0% explicitly.
+      deck.setTempo(1);
     },
     play() {
       return el.play();
@@ -1032,6 +1123,9 @@ function createAudioDeck(el, label) {
       el.pause();
       el.removeAttribute("src");
       el.load();
+      deck.track = null;
+      deck.cue = null;
+      deck.setTempo(1);
     },
     setLevel(value) {
       if (!deck.gain) return;
@@ -1039,19 +1133,540 @@ function createAudioDeck(el, label) {
       deck.gain.gain.cancelScheduledValues(0);
       deck.gain.gain.value = value;
     },
+    // For the crossfader: glide to the new level over a few milliseconds so drags don't click.
+    setFaderLevel(value) {
+      if (!deck.gain) return;
+      deck.gain.gain.setTargetAtTime(value, audioContext.currentTime, 0.015);
+    },
     fade(curve, seconds) {
       if (!deck.gain) return;
       deck.gain.gain.cancelScheduledValues(0);
       deck.gain.gain.setValueCurveAtTime(curve, audioContext.currentTime, seconds);
     },
+    setTempo(rate) {
+      window.clearInterval(deck.tempoTimer);
+      deck.applyRate(rate);
+    },
+    applyRate(rate) {
+      deck.rate = clamp(rate, 0.9, 1.1);
+      el.defaultPlaybackRate = deck.rate;
+      el.playbackRate = deck.rate;
+    },
+    setKeyLock(on) {
+      deck.keyLock = Boolean(on);
+      el.preservesPitch = deck.keyLock;
+      el.webkitPreservesPitch = deck.keyLock;
+    },
+    setEq(band, decibels) {
+      deck.eq[band] = clamp(decibels, -26, 6);
+      deck.eqNodes?.[band].gain.setTargetAtTime(deck.eq[band], audioContext.currentTime, 0.02);
+    },
+    setFilter(value) {
+      deck.filterValue = clamp(value, -1, 1);
+      if (deck.filter) applyFilter(deck.filter, deck.filterValue);
+    },
   };
 
   el.addEventListener("timeupdate", updatePlaybackProgress);
   el.addEventListener("ended", () => {
-    if (deck === activeDeck) nextTrack(false);
+    // In Manual mix a finished deck just stops; the DJ (or the safety net) decides what's next.
+    if (deck === activeDeck && booth.mixMode === "auto") nextTrack(false);
+    else updateLiveDeck();
   });
 
   return deck;
+}
+
+function applyFilter(node, value) {
+  const { type, frequency } = filterSetting(value);
+  node.type = type;
+  node.frequency.setTargetAtTime(Math.min(frequency, audioContext.sampleRate / 2), audioContext.currentTime, 0.02);
+}
+
+// A deck's fader level: in Manual mix the crossfader decides, in Auto mix only the active deck is up.
+function levelFor(deck) {
+  if (booth.mixMode !== "manual") return deck === activeDeck ? 1 : 0;
+  const { a, b } = crossfaderGains(booth.crossfader);
+  return deck === audioDecks[0] ? a : b;
+}
+
+function otherDeck(deck) {
+  return deck === audioDecks[0] ? audioDecks[1] : audioDecks[0];
+}
+
+// --- BPM analysis ---------------------------------------------------------------------------
+
+// track.bpm is undefined until analysed, null when the track has no steady beat, else the tempo.
+// Analyses run one at a time, because decoding a whole song takes a lot of memory.
+function ensureBpm(track) {
+  if (!track || track.kind !== "audio" || track.bpm !== undefined) return Promise.resolve(track?.bpm ?? null);
+
+  if (!analysisJobs.has(track.key)) {
+    const job = analysisQueue.then(() => analyzeTrack(track));
+    analysisQueue = job.catch(() => {});
+    analysisJobs.set(track.key, job);
+  }
+
+  return analysisJobs.get(track.key);
+}
+
+async function analyzeTrack(track) {
+  try {
+    const data = await (await fetch(track.url)).arrayBuffer();
+    // 22.05 kHz is plenty for finding kick drums and needs a quarter of the memory of 44.1 kHz stereo.
+    const decoded = await new OfflineAudioContext(1, 1, 22050).decodeAudioData(data);
+    const rate = decoded.sampleRate;
+    // Skip the intro of longer songs, where there's often no beat yet, and listen to a minute.
+    const start = decoded.duration > 90 ? Math.floor(decoded.length * 0.25) : 0;
+    const end = Math.min(decoded.length, start + 60 * rate);
+    const mono = new Float32Array(end - start);
+
+    for (let channel = 0; channel < decoded.numberOfChannels; channel += 1) {
+      const samples = decoded.getChannelData(channel).subarray(start, end);
+      for (let i = 0; i < mono.length; i += 1) mono[i] += samples[i] / decoded.numberOfChannels;
+    }
+
+    const result = detectBpm(mono, rate);
+    if (result && result.confidence >= 2) {
+      track.bpm = result.bpm;
+      track.firstBeat = timeForPhase(0, start / rate + result.firstBeat, 60 / result.bpm);
+    } else {
+      track.bpm = null;
+    }
+    saveTrackAnalysis(track);
+  } catch {
+    // A failed fetch or decode isn't saved, so the next session tries again.
+    track.bpm = null;
+  }
+
+  renderDisplay();
+  return track.bpm;
+}
+
+// --- Beat matching ---------------------------------------------------------------------------
+
+// How to bring `track` in on beat with what `outDeck` is playing: the incoming rate, where to
+// start it, and both beat periods. Null when either tempo is unknown or they are over 8% apart.
+function beatMatchPlan(outDeck, track) {
+  const outTrack = outDeck.track;
+  if (!outTrack?.bpm || !track?.bpm || outTrack.firstBeat === undefined || track.firstBeat === undefined) return null;
+
+  const match = matchRate(outTrack.bpm * outDeck.rate, track.bpm);
+  if (!match) return null;
+
+  const outPeriod = 60 / outTrack.bpm;
+  const inPeriod = 60 / (track.bpm * match.factor);
+  const phase = beatPhase(outDeck.currentTime, outTrack.firstBeat, outPeriod);
+  return { rate: match.rate, startTime: timeForPhase(phase, track.firstBeat, inPeriod), inPeriod, outPeriod };
+}
+
+// Playback starts a little late, so once the incoming deck runs, nudge it onto the beat. This
+// happens while it is still nearly silent at the start of the fade.
+function alignBeats(inDeck, outDeck, plan) {
+  if (!inDeck.playing || !outDeck.playing || !inDeck.track || !outDeck.track) return;
+  const outPhase = beatPhase(outDeck.currentTime, outDeck.track.firstBeat, plan.outPeriod);
+  const inPhase = beatPhase(inDeck.currentTime, inDeck.track.firstBeat, plan.inPeriod);
+  const beats = phaseDifference(inPhase, outPhase);
+  if (Math.abs(beats) > 0.02) inDeck.currentTime = Math.max(0, inDeck.currentTime + beats * plan.inPeriod);
+}
+
+function easeTempo(deck, target, seconds) {
+  window.clearInterval(deck.tempoTimer);
+  const from = deck.rate;
+  const started = performance.now();
+  deck.tempoTimer = window.setInterval(() => {
+    const progress = Math.min(1, (performance.now() - started) / (seconds * 1000));
+    deck.applyRate(from + (target - from) * progress);
+    if (progress >= 1) window.clearInterval(deck.tempoTimer);
+    renderMixer();
+  }, 250);
+}
+
+// Sync: match this deck's tempo to the other deck, and its beats too when both are playing.
+function syncDeck(deck) {
+  const other = otherDeck(deck);
+  if (!deck.track || !other.track) {
+    mixerStatus("Sync needs a track on both decks.");
+    return;
+  }
+
+  const plan = beatMatchPlan(other, deck.track);
+  if (!plan) {
+    mixerStatus(deck.track.bpm && other.track.bpm
+      ? "These tempos are more than 8% apart, too far to sync."
+      : "Sync needs the BPM of both tracks. Wait for the analysis to finish.");
+    return;
+  }
+
+  deck.setTempo(plan.rate);
+  if (deck.playing && other.playing) alignBeats(deck, other, plan);
+  mixerStatus(`Deck ${deck.label} synced to ${(other.track.bpm * other.rate).toFixed(1)} BPM.`);
+  renderMixer();
+}
+
+// --- Manual mix ------------------------------------------------------------------------------
+
+function setMixMode(mode) {
+  if (mode === booth.mixMode) return;
+  if (isTransitioning || manualBusy) {
+    mixerStatus("Wait for the crossfade to finish, then switch.");
+    return;
+  }
+
+  if (mode === "manual") {
+    if (activeDeck.kind === "youtube" && activeDeck.loaded) {
+      mixerStatus("Manual mix works with your own files and downloads. Switch after this YouTube song.");
+      return;
+    }
+    booth.mixMode = "manual";
+    setCrossfader(activeDeck === audioDecks[1] ? 1 : 0);
+    mixerStatus("Manual mix: load songs with the A and B buttons in the queue, then mix with the crossfader.");
+  } else {
+    stopCrossfaderAnimation();
+    // Keep what the room hears and stop the other deck.
+    const live = liveDeck();
+    const other = otherDeck(live);
+    if (other.loaded) other.stop();
+    booth.mixMode = "auto";
+    activeDeck = live;
+    live.setLevel(1);
+    booth.playing = live.playing;
+    mixerStatus("Auto mix: the booth crossfades for you.");
+  }
+
+  saveSettings();
+  renderDisplay();
+  syncFromDisplay(true);
+}
+
+// The deck the room hears most: the crossfader's side, unless only the other deck is playing.
+function liveDeck() {
+  const playing = audioDecks.filter((deck) => deck.playing);
+  if (playing.length === 1) return playing[0];
+  return booth.crossfader < 0.5 ? audioDecks[0] : audioDecks[1];
+}
+
+function setCrossfader(value) {
+  booth.crossfader = clamp(value, 0, 1);
+  els.crossfader.value = String(booth.crossfader);
+  const { a, b } = crossfaderGains(booth.crossfader);
+  audioDecks[0].setFaderLevel(a);
+  audioDecks[1].setFaderLevel(b);
+  updateLiveDeck();
+}
+
+// Keep the booth's idea of "now playing" in step with the decks. Only re-render the whole booth
+// when that changes, since the crossfader can fire this many times a second.
+function updateLiveDeck() {
+  if (booth.mixMode !== "manual") {
+    renderMixer();
+    return;
+  }
+
+  const live = liveDeck();
+  const playing = audioDecks.some((deck) => deck.playing);
+  const index = booth.tracks.indexOf(live.track);
+  const changed = live !== activeDeck || playing !== booth.playing || (index >= 0 && index !== booth.currentIndex);
+
+  activeDeck = live;
+  booth.playing = playing;
+  if (index >= 0 && index !== booth.currentIndex) {
+    booth.currentIndex = index;
+    if (playing) rememberPlay(live.track);
+  }
+
+  if (changed) {
+    renderDisplay();
+    syncFromDisplay(true);
+  } else {
+    renderMixer();
+  }
+}
+
+async function loadIntoDeck(deck, index) {
+  const track = booth.tracks[index];
+  if (!track) return;
+  if (track.kind !== "audio") {
+    mixerStatus("YouTube songs play in Auto mix.");
+    return;
+  }
+
+  await deck.load(track);
+  ensureBpm(track);
+  mixerStatus(`${track.title} is on deck ${deck.label}.`);
+  updateLiveDeck();
+  renderDisplay();
+}
+
+async function toggleDeck(deck) {
+  if (!deck.loaded) {
+    mixerStatus(`Load a track on deck ${deck.label} first, with the ${deck.label} button in the queue.`);
+    return;
+  }
+
+  if (deck.playing) {
+    deck.pause();
+  } else {
+    try {
+      await setupAudio();
+      await deck.play();
+    } catch {
+      mixerStatus("Press Play on the Mac once to unlock audio.");
+    }
+  }
+
+  updateLiveDeck();
+}
+
+// Play and Pause in Manual mix: pause everything, or resume the deck the room hears.
+async function manualToggle() {
+  const playing = audioDecks.filter((deck) => deck.playing);
+  if (playing.length) {
+    playing.forEach((deck) => deck.pause());
+    booth.message = "Paused";
+  } else {
+    const deck = liveDeck();
+    if (!deck.loaded) await loadIntoDeck(deck, Math.max(0, booth.currentIndex));
+    try {
+      await setupAudio();
+      await deck.play();
+      booth.message = "Booth is playing";
+    } catch {
+      booth.message = "Press Play on the Mac once to unlock audio";
+    }
+  }
+  updateLiveDeck();
+}
+
+// Next, Cue, and Play now in Manual mix: put the song on the deck the room isn't hearing, then
+// fade over to it. YouTube songs need Auto mix, so the booth switches back for them.
+async function manualPlay(index) {
+  const track = booth.tracks[index];
+  if (!track || manualBusy) return;
+
+  if (track.kind !== "audio") {
+    setMixMode("auto");
+    if (booth.mixMode === "auto") {
+      booth.message = "Switched to Auto mix for YouTube";
+      cueTrack(index, true);
+    }
+    return;
+  }
+
+  manualBusy = true;
+  try {
+    stopCrossfaderAnimation();
+    const incoming = otherDeck(liveDeck());
+    await incoming.load(track);
+    ensureBpm(track);
+    // Start from the live side, so the fade goes all the way across.
+    setCrossfader(incoming === audioDecks[0] ? 1 : 0);
+    if (!(await autoFade())) manualBusy = false;
+  } catch {
+    manualBusy = false;
+  }
+}
+
+// Auto fade: start the far deck if needed (on beat when possible) and glide the crossfader over.
+async function autoFade() {
+  const target = booth.crossfader < 0.5 ? 1 : 0;
+  const incoming = audioDecks[target];
+  const outgoing = otherDeck(incoming);
+
+  if (!incoming.loaded) {
+    mixerStatus(`Load a track on deck ${incoming.label} first.`);
+    return false;
+  }
+
+  await setupAudio();
+  if (!incoming.playing) {
+    const plan = booth.beatMatch && outgoing.playing ? beatMatchPlan(outgoing, incoming.track) : null;
+    if (plan) incoming.setTempo(plan.rate);
+    try {
+      await incoming.play();
+    } catch {
+      mixerStatus("Press Play on the Mac once to unlock audio.");
+      return false;
+    }
+    if (plan) wait(0.25).then(() => alignBeats(incoming, outgoing, plan));
+  }
+
+  manualBusy = true;
+  animateCrossfader(target, booth.crossfade);
+  return true;
+}
+
+function animateCrossfader(target, seconds) {
+  stopCrossfaderAnimation();
+  const from = booth.crossfader;
+  const started = performance.now();
+  const duration = Math.max(0.2, seconds) * 1000;
+
+  // A timer, not requestAnimationFrame, so the fade still finishes in a hidden window.
+  crossfaderTimer = window.setInterval(() => {
+    const progress = Math.min(1, (performance.now() - started) / duration);
+    setCrossfader(from + (target - from) * progress);
+    if (progress < 1) return;
+
+    stopCrossfaderAnimation();
+    // The deck that faded out has nothing left to do.
+    const faded = otherDeck(audioDecks[target]);
+    if (faded.playing) faded.pause();
+    manualBusy = false;
+    updateLiveDeck();
+  }, 40);
+}
+
+function stopCrossfaderAnimation() {
+  window.clearInterval(crossfaderTimer);
+  crossfaderTimer = 0;
+}
+
+// --- Mixer panel -----------------------------------------------------------------------------
+
+function buildMixer() {
+  const center = els.mixerPanel.querySelector(".mixer-center");
+
+  audioDecks.forEach((deck, index) => {
+    const root = els.deckStripTemplate.content.firstElementChild.cloneNode(true);
+    const find = (selector) => root.querySelector(selector);
+    const parts = {
+      name: find(".deck-name"),
+      state: find(".deck-state"),
+      track: find(".deck-track"),
+      bpm: find(".deck-bpm"),
+      play: find(".deck-play"),
+      cue: find(".deck-cue"),
+      sync: find(".deck-sync"),
+      tempo: find(".deck-tempo"),
+      tempoValue: find(".deck-tempo-value"),
+      keyLock: find(".deck-keylock"),
+      eq: root.querySelectorAll(".deck-eq"),
+      eqValues: root.querySelectorAll(".deck-eq-value"),
+      filter: find(".deck-filter"),
+      filterValue: find(".deck-filter-value"),
+    };
+
+    parts.name.textContent = `Deck ${deck.label}`;
+    parts.play.addEventListener("click", () => toggleDeck(deck));
+    parts.sync.addEventListener("click", () => syncDeck(deck));
+    parts.cue.title = "Click to set a cue point, click again to jump back to it, right-click to clear it.";
+    parts.cue.addEventListener("click", () => {
+      if (!deck.loaded) return;
+      if (deck.cue === null) {
+        deck.cue = deck.currentTime;
+        mixerStatus(`Cue set at ${formatTime(deck.cue)} on deck ${deck.label}. Click Cue to jump back; right-click to clear.`);
+      } else {
+        deck.currentTime = deck.cue;
+      }
+      renderMixer();
+    });
+    parts.cue.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      deck.cue = null;
+      renderMixer();
+    });
+
+    parts.tempo.addEventListener("input", () => {
+      deck.setTempo(1 + Number(parts.tempo.value) / 100);
+      renderMixer();
+    });
+    parts.keyLock.addEventListener("change", () => deck.setKeyLock(parts.keyLock.checked));
+    parts.eq.forEach((slider) => {
+      slider.addEventListener("input", () => {
+        deck.setEq(slider.dataset.band, Number(slider.value));
+        renderMixer();
+      });
+    });
+    parts.filter.addEventListener("input", () => {
+      deck.setFilter(Number(parts.filter.value));
+      renderMixer();
+    });
+
+    // Double-click any knob to put it back in the middle.
+    [parts.tempo, parts.filter, ...parts.eq].forEach((slider) => {
+      slider.addEventListener("dblclick", () => {
+        slider.value = "0";
+        slider.dispatchEvent(new Event("input"));
+      });
+    });
+
+    if (index === 0) center.before(root);
+    else center.after(root);
+    deckStrips.push({ deck, root, parts });
+  });
+
+  els.mixModeTabs.forEach((tab) => {
+    tab.addEventListener("click", () => setMixMode(tab.dataset.mixMode));
+  });
+  els.crossfader.addEventListener("input", () => {
+    // Grabbing the crossfader takes over from an auto fade.
+    if (crossfaderTimer) {
+      stopCrossfaderAnimation();
+      manualBusy = false;
+    }
+    setCrossfader(els.crossfader.value);
+  });
+  els.autoFadeBtn.addEventListener("click", () => autoFade());
+  els.beatMatchToggle.addEventListener("change", () => {
+    booth.beatMatch = els.beatMatchToggle.checked;
+    saveSettings();
+  });
+
+  if (booth.mixMode === "manual") setCrossfader(booth.crossfader);
+  renderMixer();
+}
+
+function renderMixer() {
+  if (isRemote || !deckStrips.length) return;
+
+  els.mixerPanel.dataset.mode = booth.mixMode;
+  els.mixModeTabs.forEach((tab) => {
+    const selected = tab.dataset.mixMode === booth.mixMode;
+    tab.classList.toggle("is-selected", selected);
+    tab.setAttribute("aria-pressed", String(selected));
+  });
+  els.crossfader.disabled = booth.mixMode !== "manual";
+  if (booth.mixMode !== "manual") els.crossfader.value = activeDeck === audioDecks[1] ? "1" : "0";
+  els.beatMatchToggle.checked = booth.beatMatch;
+
+  deckStrips.forEach(({ deck, root, parts }) => {
+    const live = deck === activeDeck && deck.playing;
+    root.classList.toggle("is-live", live);
+    parts.state.textContent = !deck.loaded ? "Empty" : live ? "Live" : deck.playing ? "Playing" : "Paused";
+    parts.state.classList.toggle("muted", !deck.playing);
+    parts.track.textContent = deck.track ? deck.track.title : "No track loaded";
+    parts.bpm.textContent = bpmText(deck);
+    parts.play.textContent = deck.playing ? "Pause" : "Play";
+    parts.cue.textContent = deck.cue === null ? "Set cue" : `Cue ${formatTime(deck.cue)}`;
+    if (document.activeElement !== parts.tempo) parts.tempo.value = ((deck.rate - 1) * 100).toFixed(1);
+    parts.tempoValue.textContent = `${deck.rate >= 1 ? "+" : ""}${((deck.rate - 1) * 100).toFixed(1)}%`;
+    parts.keyLock.checked = deck.keyLock;
+    parts.eq.forEach((slider) => {
+      slider.value = String(deck.eq[slider.dataset.band]);
+    });
+    parts.eqValues.forEach((output) => {
+      const value = deck.eq[output.dataset.band];
+      output.textContent = `${value > 0 ? "+" : ""}${value} dB`;
+    });
+    parts.filter.value = String(deck.filterValue);
+    parts.filterValue.textContent = Math.abs(deck.filterValue) < 0.02
+      ? "Open"
+      : `${deck.filterValue < 0 ? "Low-pass" : "High-pass"} ${Math.round(Math.abs(deck.filterValue) * 100)}%`;
+  });
+}
+
+function bpmText(deck) {
+  const track = deck.track;
+  if (!track) return "BPM —";
+  if (track.bpm === undefined) return analysisJobs.has(track.key) ? "BPM: analyzing…" : "BPM —";
+  if (!track.bpm) return "BPM: no steady beat";
+  const playingAt = (track.bpm * deck.rate).toFixed(1);
+  return deck.rate === 1 ? `${playingAt} BPM` : `${playingAt} BPM (track ${track.bpm})`;
+}
+
+function mixerStatus(text) {
+  els.mixerStatus.textContent = text;
 }
 
 function createYouTubeDeck() {
@@ -1297,12 +1912,17 @@ function nextTrack(useFade) {
   if (!booth.tracks.length) return;
   const nextIndex = chooseNextIndex();
   if (nextIndex < 0) return;
+  if (booth.mixMode === "manual") {
+    manualPlay(nextIndex);
+    return;
+  }
   loadTrack(nextIndex, booth.playing, useFade);
 }
 
 function previousTrack() {
   if (!booth.tracks.length || isTransitioning) return;
-  if (activeDeck.currentTime > 4) {
+  // In Manual mix, Prev restarts the deck the room hears; the DJ picks what comes before.
+  if (activeDeck.currentTime > 4 || booth.mixMode === "manual") {
     activeDeck.currentTime = 0;
     return;
   }
@@ -1370,14 +1990,21 @@ function updatePlaybackProgress() {
     currentTrack.duration = duration;
   }
 
-  if (booth.autoDj && booth.playing && !isTransitioning && duration > 0 && trusted) {
-    const remaining = duration - activeDeck.currentTime;
-    if (remaining <= Math.max(1.2, booth.crossfade + 0.25)) {
-      nextTrack(true);
-    }
+  // Seconds of real time left: a deck playing faster than 100% runs out sooner.
+  const remaining = (duration - activeDeck.currentTime) / (activeDeck.rate || 1);
+  const dueForNext = booth.autoDj && booth.playing && duration > 0 && trusted && remaining <= Math.max(1.2, booth.crossfade + 0.25);
+
+  if (booth.mixMode === "manual") {
+    // Safety net: with Auto DJ on, fade to the next song before the live deck runs out, unless
+    // the DJ already has the other deck playing.
+    if (dueForNext && !manualBusy && !otherDeck(activeDeck).playing) nextTrack(true);
+  } else if (dueForNext && !isTransitioning) {
+    nextTrack(true);
   }
 
   renderPlaybackOnly();
+  // Keep the deck strips current during crossfades, when the rest of the booth isn't re-rendered.
+  renderMixer();
 }
 
 function applySettingsToInputs() {
@@ -1393,13 +2020,23 @@ function saveSettings() {
     energy: booth.energy,
     crossfade: booth.crossfade,
     autoDj: booth.autoDj,
+    mixMode: booth.mixMode,
+    beatMatch: booth.beatMatch,
   });
 }
 
 function saveTrackPrefs(track) {
-  // Merge into the stored tags so tags for tracks not loaded this session survive.
+  mergeTrackPrefs(track, { energy: track.energy });
+}
+
+function saveTrackAnalysis(track) {
+  mergeTrackPrefs(track, { bpm: track.bpm, firstBeat: track.firstBeat });
+}
+
+// Merge into what is stored, so other tracks (and this track's other fields) survive.
+function mergeTrackPrefs(track, fields) {
   const prefs = readJson(trackPrefsKey, {});
-  prefs[track.key] = { energy: track.energy };
+  prefs[track.key] = { ...prefs[track.key], ...fields };
   trackPrefs[track.key] = prefs[track.key];
   writeJson(trackPrefsKey, prefs);
 }
@@ -1427,6 +2064,11 @@ function renderDisplay() {
   els.signalReadout.textContent = booth.playing ? "Live" : "Ready";
   renderPlaybackOnly();
   renderQueue();
+  renderMixer();
+
+  // Analyse what's playing and what's next ahead of time, so the next mix can be beat-matched.
+  ensureBpm(currentTrack);
+  ensureBpm(nextTrack);
 }
 
 function renderPlaybackOnly() {
@@ -1459,7 +2101,8 @@ function renderQueue() {
     title.textContent = track.title;
     const meta = document.createElement("p");
     meta.className = "queue-meta";
-    meta.textContent = `${track.artist} - ${formatTime(track.duration)}${sourceLabel(track)} - energy ${track.energy} - ${track.votes} votes`;
+    const bpm = track.bpm ? ` - ${track.bpm} BPM` : "";
+    meta.textContent = `${track.artist} - ${formatTime(track.duration)}${sourceLabel(track)}${bpm} - energy ${track.energy} - ${track.votes} votes`;
     info.append(title, meta);
 
     const actions = document.createElement("div");
@@ -1471,6 +2114,12 @@ function renderQueue() {
       syncFromDisplay(true);
     });
     actions.append(cue, vote, tagButton("Warm", track, 28), tagButton("Groove", track, 55), tagButton("Peak", track, 86));
+    if (booth.mixMode === "manual" && track.kind === "audio") {
+      actions.append(
+        actionButton("A", () => loadIntoDeck(audioDecks[0], index)),
+        actionButton("B", () => loadIntoDeck(audioDecks[1], index)),
+      );
+    }
 
     row.append(indexEl, info, actions);
     return row;

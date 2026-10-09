@@ -184,6 +184,74 @@
           </aside>
         </section>
 
+        <section class="mixer-panel" aria-label="DJ mixer">
+          <div class="section-title">
+            <div>
+              <p class="eyebrow">Mixer</p>
+              <h2>Decks</h2>
+            </div>
+            <div class="source-tabs mix-mode" role="group" aria-label="Mix mode">
+              <button type="button" class="source-tab is-selected" data-mix-mode="auto" aria-pressed="true">Auto mix</button>
+              <button type="button" class="source-tab" data-mix-mode="manual" aria-pressed="false">Manual mix</button>
+            </div>
+          </div>
+          <div class="mixer-grid">
+            <div class="mixer-center">
+              <label class="crossfader-row">
+                <span>A</span>
+                <input id="crossfader" type="range" min="0" max="1" step="0.01" value="0" aria-label="Crossfader">
+                <span>B</span>
+              </label>
+              <button id="auto-fade-btn" class="queue-action" type="button">Auto fade</button>
+              <label class="switch-row">
+                <span>Beat match</span>
+                <input id="beatmatch-toggle" type="checkbox" checked>
+              </label>
+              <p id="mixer-status" class="search-status">Auto mix: the booth crossfades for you. Switch to Manual mix to use the crossfader.</p>
+            </div>
+          </div>
+        </section>
+
+        <template id="deck-strip-template">
+          <div class="deck-strip">
+            <div class="deck-head">
+              <strong class="deck-name">Deck A</strong>
+              <span class="pill muted deck-state">Empty</span>
+            </div>
+            <p class="deck-track">No track loaded</p>
+            <p class="deck-bpm">BPM —</p>
+            <div class="deck-buttons">
+              <button type="button" class="queue-action deck-play">Play</button>
+              <button type="button" class="queue-action deck-cue">Set cue</button>
+              <button type="button" class="queue-action deck-sync">Sync</button>
+            </div>
+            <label class="deck-control">
+              <span>Tempo <output class="deck-tempo-value">0.0%</output></span>
+              <input class="deck-tempo" type="range" min="-8" max="8" step="0.1" value="0">
+            </label>
+            <label class="deck-control switch-row">
+              <span>Key lock</span>
+              <input class="deck-keylock" type="checkbox" checked>
+            </label>
+            <label class="deck-control">
+              <span>High <output class="deck-eq-value" data-band="high">0 dB</output></span>
+              <input class="deck-eq" data-band="high" type="range" min="-26" max="6" step="1" value="0">
+            </label>
+            <label class="deck-control">
+              <span>Mid <output class="deck-eq-value" data-band="mid">0 dB</output></span>
+              <input class="deck-eq" data-band="mid" type="range" min="-26" max="6" step="1" value="0">
+            </label>
+            <label class="deck-control">
+              <span>Low <output class="deck-eq-value" data-band="low">0 dB</output></span>
+              <input class="deck-eq" data-band="low" type="range" min="-26" max="6" step="1" value="0">
+            </label>
+            <label class="deck-control">
+              <span>Filter <output class="deck-filter-value">Open</output></span>
+              <input class="deck-filter" type="range" min="-1" max="1" step="0.02" value="0">
+            </label>
+          </div>
+        </template>
+
         <section id="remote-view" class="remote-view" hidden>
           <div class="phone-now">
             <p class="eyebrow">Now Playing</p>

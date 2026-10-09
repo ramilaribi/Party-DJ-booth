@@ -427,6 +427,7 @@ label span,
 .card,
 .remote-card,
 .phone-now,
+.mixer-panel,
 .queue-panel {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -773,8 +774,104 @@ input[type="range"] {
   overflow-wrap: anywhere;
 }
 
-.queue-panel {
+.queue-panel,
+.mixer-panel {
   padding: 1rem;
+}
+
+.mixer-panel .section-title {
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}
+
+.mix-mode {
+  min-width: 16rem;
+}
+
+.mixer-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(14rem, 18rem) minmax(0, 1fr);
+  gap: 0.9rem;
+  align-items: start;
+}
+
+.deck-strip,
+.mixer-center {
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.deck-strip.is-live {
+  border-color: rgba(32, 243, 198, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(32, 243, 198, 0.2);
+}
+
+.deck-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.deck-name {
+  font-size: 1.15rem;
+  text-transform: uppercase;
+}
+
+.deck-track {
+  margin: 0;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.deck-bpm {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.deck-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.42rem;
+}
+
+.deck-control {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.deck-control output {
+  float: right;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.crossfader-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: center;
+  font-weight: 900;
+}
+
+.crossfader-row input {
+  width: 100%;
+}
+
+.mixer-panel[data-mode="auto"] .deck-play,
+.mixer-panel[data-mode="auto"] .deck-sync,
+.mixer-panel[data-mode="auto"] #auto-fade-btn {
+  display: none;
 }
 
 .section-title {
@@ -948,6 +1045,10 @@ body.hype {
 @media (max-width: 980px) {
   .stage {
     min-height: 36rem;
+  }
+
+  .mixer-grid {
+    grid-template-columns: 1fr;
   }
 
   .stage-overlay {

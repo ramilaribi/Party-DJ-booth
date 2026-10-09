@@ -24,6 +24,8 @@ const patterns = [
   [/^(?:hype|hype it up|hype moment|drop it|drop the beat|make some noise)$/, () => ({ action: "hype" })],
   [/^(?:set )?(?:the )?cross ?fade (?:to )?(\d{1,2})(?: seconds?)?$/, (m) => ({ action: "crossfade", value: clampNumber(m[1], 0, 12) })],
   [/^(?:turn )?auto ?dj (on|off)$|^turn (on|off) auto ?dj$/, (m) => ({ action: "autoDj", value: (m[1] || m[2]) === "on" })],
+  [/^(?:switch to |go to |use )?(manual|auto)(?:matic)? mix(?:ing)?(?: mode)?$/, (m) => ({ action: "mixMode", value: m[1] })],
+  [/^(?:auto ?fade|fade(?: over| across| it)?|cross ?fade(?: over| across)?)$/, () => ({ action: "autoFade" })],
   [/^(?:queue|queue up|add)(?: up)? (.+?)(?: to (?:the )?queue| next| later)?$/, (m) => songCommand("queueSong", m[1])],
   [/^(?:play|put on|i want to hear|can you play|could you play) (.+)$/, (m) => songCommand("playSong", m[1])],
 ];
