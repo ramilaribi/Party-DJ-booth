@@ -48,9 +48,9 @@ The Mac booth has:
 - Real audio playback in the browser.
 - Play, pause, previous, next, and hype controls, plus a master volume.
 - Voice control: press Talk (or V) and say a command.
-- DJ mixer: two decks with bass/mid/treble EQ, a filter sweep, tempo with key lock, automatic BPM detection, Sync, and a hot cue.
-- Auto mix with beat-matched crossfades, or Manual mix with a crossfader.
-- Crossfades between tracks, including between your files and YouTube.
+- DJ mixer: two decks with spinning platters, bass/mid/treble EQ, a filter sweep, tempo with key lock, automatic BPM detection, Sync, and a hot cue.
+- Auto mix with beat-matched transitions, or Manual mix with a crossfader. Both decks play your files or YouTube.
+- Seven transition styles: Crossfade, Bass swap, Filter sweep, Echo out, Brake, Cut on the beat, and Mix it up.
 - Energy control and an Auto DJ that plays every track before repeating.
 - Queue with cue, vote, and energy tagging.
 - QR code for phone pairing.
@@ -59,9 +59,10 @@ The phone remote has:
 
 - Play, pause, previous, next, and hype controls.
 - Music search and download to the Mac.
-- YouTube search with Play now and Add to queue on the booth.
+- YouTube search with Play now, Add to queue, Add all, and YouTube playlist import.
+- One-tap buttons for recent searches.
 - Voice commands through the phone keyboard's dictation key.
-- Volume, energy, and crossfade sliders.
+- Volume, energy, and crossfade sliders, and the transition style.
 - Live now-playing progress.
 - Queue browsing with cue and vote actions.
 
@@ -79,6 +80,9 @@ The phone remote has:
 10. Use the phone as the booth controller.
 
 For a full checklist, see [docs/WEEKEND_RUNBOOK.md](docs/WEEKEND_RUNBOOK.md).
+
+For a working list of future party-experience improvements, see
+[docs/EXPERIENCE_UPGRADES.md](docs/EXPERIENCE_UPGRADES.md).
 
 ## Search And Download Music
 
@@ -122,11 +126,18 @@ printf 'YOUTUBE_API_KEY=%s\n' 'PASTE_YOUR_KEY_HERE' > .env
 
 The terminal prints `YouTube search: on` when the key is loaded. Reading `.env` needs Node.js 20.12 or newer. On older versions, run `YOUTUBE_API_KEY=... npm start` instead. `.env` is gitignored, and the key stays on the Mac: phones search through the server.
 
+### Adding a whole style or artist (Raï, The Weeknd, …)
+
+- **Search and Add all:** search "raï" or "the weeknd", then press **Add all** at the top of the results to queue all of them at once.
+- **Import a playlist:** paste a YouTube playlist link (any link with `list=` in it) into the YouTube search box and press Search. The booth imports up to 100 playable videos. Add all queues them. A playlist costs about 4 searches' worth of quota, against 100 for a single search.
+- **Recent searches:** every search you make shows up as a button under the box on that device, so "Raï" or "The Weeknd" is one tap the next time.
+- **Your own files:** for the best sound (EQ, beat matching, effects), add MP3s you own with **Choose a music folder**.
+
 Good to know:
 
 - The free quota allows about 100 searches a day.
-- YouTube audio plays inside YouTube's player, so YouTube songs get no visualizer bars and no EQ.
-- Crossfades work between your files and YouTube in both directions. Going from one YouTube video to another fades out, switches, and fades back in.
+- YouTube audio plays inside YouTube's player, so YouTube songs get no visualizer bars, EQ, filter, or tempo. The crossfader, volume, and cue still work.
+- Crossfades work between any two songs, files or YouTube. Between two YouTube videos, both play side by side on the stage during the mix.
 - Ads can appear, and some videos block playback outside YouTube. The booth skips a video that won't play and says why.
 - Open the booth in a visible window. Browsers block a video from starting with sound in a tab that has never been on screen.
 - If the terminal says `YouTube search: off`, the server didn't find the key. Check `.env` and restart the server.
@@ -151,6 +162,7 @@ You can also type any command in either box.
 | "hype", "drop the beat" | Hype moment |
 | "crossfade 8 seconds", "auto DJ off" | Booth settings |
 | "manual mix", "auto mix", "fade" | Mixer mode, and an auto fade in Manual mix |
+| "transition echo out", "use the bass swap", "mix it up" | Transition style |
 | "play One More Time by Daft Punk" | Plays it now: from the queue if it's there, otherwise YouTube's top result |
 | "add Get Lucky to the queue" | Adds YouTube's top result to the queue |
 
@@ -158,11 +170,29 @@ Starting with "hey DJ" or ending with "please" is fine. Commands are in English,
 
 ## DJ Mixing
 
-The Mixer panel under the stage has deck A, deck B, and the controls between them. It works with your own files and open-audio downloads. YouTube songs play through YouTube's player, so they skip the mixer.
+The Mixer panel under the stage has deck A, deck B, and the controls between them. Either deck can hold one of your files or a YouTube video, and the booth alternates between them, so every song change overlaps two decks.
+
+Files get the full channel: EQ, filter, tempo, BPM, Sync, and beat matching. YouTube's audio stays inside YouTube's player, so a YouTube deck gets the crossfader, volume, platter, and cue. Its strip says "YouTube: volume and crossfader only", and the other controls are greyed out.
+
+### Transitions
+
+Pick a style in the mixer's **Transition** menu (or on the phone), then press **Mix next**. Auto DJ uses the same style when it changes songs by itself. The length is your **Crossfade seconds** setting.
+
+| Style | What you hear | Works with |
+| --- | --- | --- |
+| Crossfade | One song smoothly replaces the other | Everything |
+| Bass swap | The next song comes in without its bass; halfway through the basses swap, so the low end never doubles up | File to file |
+| Filter sweep | A high-pass rises through the old song, draining it to a thin hiss while the next one fades in | From a file |
+| Echo out | The old song fires a tempo-synced echo and drops out, leaving its echoes ringing over the next one | From a file |
+| Brake | The old song slows to a stop like a turntable losing power, then the next song drops in | From a file |
+| Cut on the beat | An instant switch, timed to the old song's next beat when its tempo is known | Everything |
+| Mix it up | A different style each time, from the ones that work for those two songs | Everything |
+
+If a style needs a file and the outgoing song is on YouTube, the booth uses a crossfade for that change. The mixer shows the last transition it used.
 
 ### Auto mix (default)
 
-The booth crossfades for you. With **Beat match** on, it lines up the next song's tempo and beats with the current one before fading. Afterwards it drifts back to the song's own tempo over 8 seconds. Beat matching needs both tempos within 8% of each other, counting half and double time. Otherwise it does a normal crossfade.
+The booth changes songs for you with your transition style. With **Beat match** on, it lines up the next song's tempo and beats with the current one first. Afterwards it drifts back to the song's own tempo over 8 seconds. Beat matching needs two files whose tempos are within 8% of each other, counting half and double time.
 
 ### Manual mix
 
@@ -177,8 +207,9 @@ Next, Cue, Play now, and voice song requests still work. They load the song on t
 
 | Control | What it does |
 | --- | --- |
+| Platter | Spins while the deck plays, faster or slower with the tempo, with the YouTube thumbnail as its label. On a file, drag it right or left to nudge the song ahead or back (±4% while you hold it), to line up beats by ear |
 | BPM | Detected automatically the first time a song is loaded or comes up next, then remembered |
-| Tempo | ±8%. The readout shows the BPM you're playing at |
+| Tempo | ±8%. The readout shows the BPM you're playing at. In Manual mix it stays where you set it when you load the next song; Auto mix plays each song at its own tempo |
 | Key lock | Keeps the pitch steady when you change tempo (on by default) |
 | High, Mid, Low | EQ from −26 dB (nearly a kill) to +6 dB |
 | Filter | Left sweeps a low-pass, right a high-pass, center is open |

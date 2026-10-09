@@ -103,7 +103,7 @@ Found in the 2026-10-09 code review and not fixed yet, most important first:
 4. **Remote sliders jump while dragging.** Incoming state resets the phone's slider values mid-drag.
 5. **Download leftovers.** A failed download leaves a `.download` temp file. Parallel downloads of the same file share one temp path.
 6. **Pairing ends when the server restarts.** The session code is regenerated on every start, so phones must scan the QR code again. This is safer, but an installed PWA would need a way to keep or renew pairing.
-7. **YouTube-to-YouTube is a dip, not an overlap.** One player can't overlap two videos. A second YouTube player would allow a real crossfade, but both would need to stay visible while they play.
+7. **YouTube decks have no effects.** YouTube's audio never reaches Web Audio, so a YouTube deck has no EQ, filter, tempo, BPM, or beat matching, and transitions from it fall back to a crossfade.
 8. **No visualizer or EQ on YouTube tracks.** Their audio stays inside YouTube's cross-origin player and can't reach Web Audio.
 9. **A YouTube start can't be retried mid-transition.** A video that times out while starting is skipped for this round and retried in the next one.
 10. **Voice is push-to-talk and English only.** There's no always-listening wake word yet, and the parser only knows English phrases. French commands would need a second pattern set and a language switch for the recognizer.
@@ -111,7 +111,7 @@ Found in the 2026-10-09 code review and not fixed yet, most important first:
 12. **No loops yet.** They need an `AudioBufferSourceNode` playback engine instead of `<audio>` elements.
 13. **BPM detection assumes a steady tempo.** Songs with tempo changes, live drums, or no clear kick may get a wrong BPM or "no steady beat". Beat matching then lands off-beat, or is skipped.
 14. **Manual mix keeps matched tempos.** After Sync or an automatic fade in Manual mix, the deck stays at the matched tempo; only Auto mix eases back. A long Manual mix session can drift away from the songs' original tempos.
-15. **The mixer doesn't cover YouTube.** A YouTube request in Manual mix switches back to Auto mix.
+15. **Two videos share the stage during a mix.** Each YouTube player must stay visible while it plays, so the stage splits into two smaller videos for the length of a YouTube-to-YouTube transition.
 
 ## Important Boundary
 
@@ -224,7 +224,7 @@ The network-safety issues from the code review are fixed.
 **Done on 2026-10-09: YouTube search and play.** The owner asked for YouTube search, play, and download. Download was declined: it breaks YouTube's Terms of Service, usually copyright, and the Important Boundary above. Search and play use the official YouTube Data API v3 and IFrame player:
 
 - `/api/youtube/search` on the server, with the key read from `.env` (gitignored, mode 600) and pairing required.
-- Three decks with one interface: two audio decks and a YouTube deck. Crossfades work between any of them, with a fade-out / fade-in dip for YouTube-to-YouTube. See Decks in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- Three decks with one interface: two audio decks and a YouTube deck, with a fade-out / fade-in dip for YouTube-to-YouTube. (Since replaced by two decks that each play files or YouTube; see the next entry.)
 - Find Music has an Open audio / YouTube switch on the Mac and the phone, with Play now and Add to queue.
 - Failure handling: player and start timeouts, refused videos skipped with a reason, Cue / Play now held until a running crossfade ends, and an ad-length guard for Auto DJ.
 
@@ -286,7 +286,40 @@ How it was verified:
 
 Not verified yet: BPM detection on a real music library (the confidence threshold of 2 is a guess), and how the EQ sounds on real speakers.
 
+**Done on 2026-10-09: YouTube in the mixer, transitions, platters, and faster ways to add music.** The owner reported three problems: the video looked small and stuck to the left, "the DJ doesn't work" with YouTube, and they wanted transitions and an easy way to add Raï or The Weeknd. Then they asked "why is there no disk?".
+
+- **Hybrid decks:** decks A and B each play a file or a YouTube video (two YouTube players). YouTube-to-YouTube is now a real overlapping crossfade with both videos side by side; Manual mix, the crossfader, Auto fade, and cue all work with YouTube. YouTube decks grey out EQ, filter, tempo, and sync, and say why.
+- **Video layout:** the video fills the stage width, centered, up to 70% of the window height.
+- **Transitions:** Crossfade, Bass swap, Filter sweep, Echo out, Brake, Cut on the beat, and Mix it up, with a **Mix next** button, a picker on the Mac and the phone, a voice command, and a status line naming the last one used. Each deck's file channel gained an echo send for Echo out.
+- **Platters:** a spinning vinyl platter per deck. Its speed follows the tempo, it shows the YouTube thumbnail as its label, and dragging it on a file nudges the tempo up to ±4%.
+- **Adding music:** **Add all** on YouTube results, YouTube playlist import (`/api/youtube/playlist`, up to 100 videos, skipping non-embeddable and live ones), and recent-search buttons per device.
+- **Fixed on the way:** the phone remote's panel had been showing on the Mac booth since the first version (`.remote-view { display: grid }` overrode `hidden`). A global `[hidden] { display: none !important }` now makes `hidden` authoritative.
+
+How it was verified:
+
+- 69 unit tests (new voice phrases for transitions).
+- With drum loops (muted): every transition style ran to the end without errors, including Bass swap, Filter sweep, Cut on the beat beat-matched, Brake's rate falling 0.72 → 0.46 → 0.25 with key lock off then restored, and Mix it up choosing among the valid ones.
+- With the real YouTube player (search mocked), on screen:
+  - File → YouTube crossfade.
+  - YouTube → YouTube with Cut, and with a 5-second Crossfade where both videos played side by side (two 471×265 players) before the new one filled the stage (952×535).
+- Also checked: the phone's Transition picker changing the booth, the playlist endpoint (mocked: drops blocked and live videos, clear messages for a missing playlist and a bad link), Add all, and recent-search buttons.
+
+Not verified yet: Manual mix with two YouTube decks on the crossfader, the platter nudge by hand, and how each transition sounds on real music.
+
 What's next is open. Options: loops (new playback engine), waveforms, MIDI controller support, mixer controls on the phone, French voice commands, and a hands-free wake word.
+
+For the current experience-upgrade backlog, see [docs/EXPERIENCE_UPGRADES.md](docs/EXPERIENCE_UPGRADES.md). Suggested order:
+
+1. Preflight / Sound Check Mode
+2. Real Play Next
+3. Guest Vote QR
+4. Better Phone Remote
+5. Party Recovery Button
+6. PWA Install Mode
+7. Queue Sections
+8. Smart DJ Suggestions
+9. Theme / Venue Modes
+10. Waveform Preview
 
 On 2026-10-09 the owner asked for bigger features: YouTube search and playback, DJ mixing, and voice control. Their scope and order are still being agreed, so check with the owner before starting. Downloading from YouTube stays out of scope under the Important Boundary above.
 

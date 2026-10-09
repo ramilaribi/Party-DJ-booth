@@ -94,7 +94,7 @@ The server trusts two kinds of clients.
 | Socket as `display`, `display:state` | yes | no | no |
 | Socket as `remote`, `remote:command` | yes | yes | no |
 | `GET /api/search`, `POST /api/download` | yes | yes | no |
-| `GET /api/youtube/search` | yes | yes | no |
+| `GET /api/youtube/search`, `GET /api/youtube/playlist` | yes | yes | no |
 | `GET /api/session` (QR code and session code) | yes | no | no |
 | `GET /api/downloads`, `/music/*` | yes | no | no |
 
@@ -116,43 +116,56 @@ YouTube is outside this boundary on purpose: it is search and play only. `/api/y
 
 ## Decks
 
-The booth has three decks with the same interface (`load`, `play`, `pause`, `stop`, `setLevel`, `fade`, `currentTime`, `duration`):
+The booth has two decks, A and B, with one interface (`load`, `play`, `pause`, `stop`, `setLevel`, `setFaderLevel`, `fade`, `currentTime`, `duration`). Each deck has two engines and uses whichever its current track needs (`deck.kind`):
 
-- **Deck A** and **Deck B**: `<audio>` elements for local files and downloads.
-- **YouTube**: one YouTube IFrame player, shown at the top of the stage while it holds a video.
+- **File engine:** an `<audio>` element feeding the deck's Web Audio mixer channel.
+- **YouTube engine:** the deck's own YouTube IFrame player, in its own slot on the stage (`#youtube-slot-a`, `#youtube-slot-b`).
 
-`deckFor(track)` picks the YouTube deck for YouTube tracks, and otherwise the audio deck that isn't playing, so the two can overlap.
+Every song change loads the other deck (`otherDeck(activeDeck)`), so any two songs overlap: file to file, file to YouTube, or YouTube to YouTube. Levels go to both engines, so a deck keeps its level when it switches between them.
 
-### Audio decks
+### File engine
 
-Each one is a mixer channel:
+Each deck's file engine is a mixer channel:
 
 ```text
 MediaElementSource -> low shelf (200 Hz) -> peaking (1 kHz) -> high shelf (3.5 kHz)
   -> sweep filter -> deck fader GainNode -> AnalyserNode -> master GainNode -> speakers
+                  \-> echo send -> DelayNode <-> feedback ---------^ (skips the fader)
 ```
 
-Tempo is the element's `playbackRate` (±8%). Key lock is `preservesPitch`. A new `src` resets the rate, so `load` sets it back explicitly. Each deck also keeps the track it holds (`deck.track`) and its hot cue.
+The echo send skips the fader, so echoes keep ringing after the fader closes; the Echo out transition uses that.
 
-The `AnalyserNode` drives the canvas visualizer. It sits before the master gain, so the bars keep moving when the volume is low. Master volume changes ramp with `setTargetAtTime` to avoid clicks. The YouTube deck applies the same master volume by multiplying it into the player volume. Fades are scheduled on the `AudioContext` clock with `setValueCurveAtTime`, using a smoothstep shape over the crossfade length. Before any direct gain change, `setLevel` clears leftover fade automation, because in Web Audio setting a value inside a scheduled curve's time range throws `NotSupportedError`.
+Tempo is the element's `playbackRate` (±8%). Key lock is `preservesPitch`. A new `src` resets the rate, so `load` puts the deck's tempo back on it. Auto mix sets each new song's tempo explicitly (100%, or the beat-match rate). Manual mix keeps the deck's tempo fader, like a hardware deck. Each deck also keeps the track it holds (`deck.track`) and its hot cue.
 
-### YouTube deck
+The `AnalyserNode` drives the canvas visualizer. It sits before the master gain, so the bars keep moving when the volume is low. Master volume changes ramp with `setTargetAtTime` to avoid clicks. Fades are scheduled on the `AudioContext` clock with `setValueCurveAtTime`, using a smoothstep shape over the crossfade length. Before any direct gain change, `setLevel` clears leftover fade automation, because in Web Audio setting a value inside a scheduled curve's time range throws `NotSupportedError`.
 
-- YouTube audio plays inside YouTube's cross-origin player, so it never reaches the analyser. The visualizer shows its idle animation while YouTube plays.
-- Fades step the player's volume (`setVolume`, 0–100) every 50 ms along the same smoothstep curve.
+### YouTube engine
+
+- YouTube audio plays inside YouTube's cross-origin player, so it never reaches Web Audio: no analyser (the visualizer shows its idle animation), EQ, filter, tempo, or effects. The mixer greys those controls out on a YouTube deck.
+- Its level (fades and crossfader) times the master volume goes to `setVolume` (0–100). Fades step it every 50 ms along the same smoothstep curve.
 - A new video starts with `loadVideoById`. Never cue a video and then call `playVideo` right away: YouTube either fails with error 2 or stays cued. `cueVideoById` is only used to show a preview while the booth is paused.
 - The player has no `timeupdate` event, so the deck polls it every 500 ms while it plays.
-- YouTube's rules forbid covering the player, so while a video shows, the stage overlay moves below it (`.stage.has-video`).
+- YouTube's rules forbid covering a player, so `layoutVideos` shows each deck's slot only while it holds a video. One video fills the stage width (up to 70% of the window height). Two (during a crossfade or a manual mix) sit side by side. While any video shows, the stage overlay moves below the videos (`.stage.has-video`).
 
 ### Transitions
 
-| From → to | How |
-| --- | --- |
-| Audio → audio | Overlap crossfade on the audio clock |
-| Audio ↔ YouTube | Overlap crossfade: audio clock on one side, volume steps on the other |
-| YouTube → YouTube | Dip: fade out over half the crossfade, load the next video, fade in over the other half (one player can't overlap two videos) |
+`runTransition(from, to, seconds)` runs the chosen style once the incoming deck is playing silently, and returns the style it used:
 
-A timer, never `requestAnimationFrame`, ends every fade and pins the final levels. Browsers stop animation frames when the tab is hidden or the screen sleeps, which used to freeze fades halfway and lock out every later transition.
+| Style | How it's built |
+| --- | --- |
+| Crossfade | Smoothstep fade curves on both decks |
+| Bass swap | The incoming low shelf starts at −26 dB while its fader rises; at the midpoint both low shelves swap; then the outgoing fader falls |
+| Filter sweep | The outgoing filter turns high-pass and ramps exponentially from 30 Hz to 5 kHz; its fader holds, then falls in the last 40% |
+| Echo out | The echo delay is set to ¾ beat (feedback 0.55); the send and the dry fader cut together after one beat, so only echoes ring on |
+| Brake | The outgoing `playbackRate` falls to 0.25 over 1.4 s with key lock off (pitch drops); then the deck pauses and the incoming one drops in at full level |
+| Cut on the beat | Waits for the outgoing song's next beat when its BPM is known, then swaps levels |
+| Mix it up | A random pick from the styles that work for these two decks |
+
+Styles that need Web Audio on the outgoing deck (filter, echo, brake) or on both decks (bass swap) fall back to a crossfade when YouTube is involved. Everything is scheduled on the audio clock or driven by elapsed time, never `requestAnimationFrame`: browsers stop animation frames when the tab is hidden or the screen sleeps, which once froze fades halfway and locked out every later transition.
+
+### Platters
+
+Each deck strip has a CSS vinyl platter. It spins at 33⅓ RPM (1.8 s per turn) divided by the deck's tempo, only while the deck plays, and shows the YouTube thumbnail as its label. On a file deck, dragging it bends `playbackRate` by up to ±4% for as long as you hold it, then returns to the deck's tempo: a jog-wheel nudge for lining up beats by ear.
 
 ### When something fails
 
@@ -209,9 +222,9 @@ In Auto mix, the incoming deck then eases back to 100% over 8 seconds once the f
 - The crossfader sets both deck faders with an equal-power curve (`crossfaderGains`). It ramps with `setTargetAtTime`, so dragging doesn't click.
 - The **live deck** is the crossfader's side, unless only the other deck is playing. `updateLiveDeck` keeps `activeDeck`, `booth.currentIndex`, and `booth.playing` in step, so the stage, the phone, and voice all follow it.
 - **Auto fade** starts the far deck (on beat when possible) and moves the crossfader on a 40 ms timer. When it finishes, it pauses the deck that faded out.
-- Play, Next, Cue, Play now, and voice requests are routed through `manualToggle` and `manualPlay`. Those load the free deck and auto fade. Prev restarts the live deck. A YouTube request switches back to Auto mix, because YouTube can't go through the mixer.
+- Play, Next, Cue, Play now, and voice requests are routed through `manualToggle` and `manualPlay`. Those load the free deck (file or YouTube) and auto fade. Prev restarts the live deck.
 - **Safety net:** with Auto DJ on, if the live deck is about to end and the other deck is idle, the booth runs `manualPlay` on the next song.
-- Switching back to Auto mix keeps the live deck and stops the other. Switching is refused during a crossfade, and Manual mix is refused while YouTube plays.
+- Switching back to Auto mix keeps the live deck and stops the other. Switching is refused during a crossfade.
 
 ## Voice Commands
 
@@ -270,7 +283,7 @@ Playlist files are not stored permanently. You choose them again when you start 
 - Handles file import.
 - Handles music search (open audio and YouTube), downloads, and YouTube queueing.
 - Controls playback through the deck interface.
-- Runs crossfades and YouTube dips.
+- Runs transitions between the two decks, in any of the seven styles.
 - Listens for voice commands and runs them (booth), or forwards them (phone).
 - Draws the visualizer.
 - Renders booth and remote screens.
