@@ -86,6 +86,7 @@ const booth = {
   visualStyle: "spectrum",
   hypeUntil: 0,
   message: "Waiting for music on the Mac",
+  history: [],
 };
 
 function boot() {
@@ -344,6 +345,7 @@ function addFiles(fileList) {
       url: URL.createObjectURL(file),
       energy: saved.energy ?? guessEnergy(file.name),
       votes: 0,
+      plays: 0,
       addedAt: Date.now(),
     };
 
@@ -379,6 +381,7 @@ function addDownloadedTrack(downloadedTrack, announce) {
     url: downloadedTrack.url,
     energy: downloadedTrack.energy ?? guessEnergy(`${title} ${artist}`),
     votes: 0,
+    plays: 0,
     source: downloadedTrack.source || "Downloaded",
     sourceUrl: downloadedTrack.sourceUrl || "",
     licenseUrl: downloadedTrack.licenseUrl || "",
@@ -514,14 +517,15 @@ async function loadTrack(index, shouldPlay, useFade) {
   const canFade = useFade && shouldPlay && booth.playing && booth.crossfade > 0 && currentDeck.el.src;
 
   booth.currentIndex = index;
+  rememberPlay(track);
   booth.message = `Loaded ${track.title}`;
 
   if (!canFade) {
     currentDeck.el.pause();
     currentDeck.el.src = track.url;
     currentDeck.el.currentTime = 0;
-    if (currentDeck.gain) currentDeck.gain.gain.value = 1;
-    if (nextDeck.gain) nextDeck.gain.gain.value = 0;
+    setDeckGain(currentDeck, 1);
+    setDeckGain(nextDeck, 0);
     if (shouldPlay) await playActive();
     updatePlaybackProgress();
     renderDisplay();
@@ -534,7 +538,7 @@ async function loadTrack(index, shouldPlay, useFade) {
   nextDeck.el.pause();
   nextDeck.el.src = track.url;
   nextDeck.el.currentTime = 0;
-  nextDeck.gain.gain.value = 0;
+  setDeckGain(nextDeck, 0);
 
   try {
     await nextDeck.el.play();
@@ -556,27 +560,46 @@ async function loadTrack(index, shouldPlay, useFade) {
 }
 
 function fadeDecks(fromDeck, toDeck, seconds) {
-  const duration = Math.max(0.2, seconds) * 1000;
-  const start = performance.now();
+  const duration = Math.max(0.2, seconds);
+  const steps = 64;
+  const fadeIn = new Float32Array(steps);
+  const fadeOut = new Float32Array(steps);
+
+  for (let i = 0; i < steps; i += 1) {
+    const progress = i / (steps - 1);
+    const shaped = progress * progress * (3 - 2 * progress);
+    fadeIn[i] = shaped;
+    fadeOut[i] = 1 - shaped;
+  }
+
+  // Run the fade on the audio clock. requestAnimationFrame stops when the tab is hidden
+  // or the screen sleeps, which used to freeze the fade and lock out every later transition.
+  const start = audioContext.currentTime;
+  fromDeck.gain.gain.cancelScheduledValues(0);
+  toDeck.gain.gain.cancelScheduledValues(0);
+  fromDeck.gain.gain.setValueCurveAtTime(fadeOut, start, duration);
+  toDeck.gain.gain.setValueCurveAtTime(fadeIn, start, duration);
 
   return new Promise((resolve) => {
-    function step(now) {
-      const progress = clamp((now - start) / duration, 0, 1);
-      const shaped = progress * progress * (3 - 2 * progress);
-      fromDeck.gain.gain.value = 1 - shaped;
-      toDeck.gain.gain.value = shaped;
-
-      if (progress < 1) {
-        requestAnimationFrame(step);
-      } else {
-        fromDeck.gain.gain.value = 0;
-        toDeck.gain.gain.value = 1;
-        resolve();
-      }
-    }
-
-    requestAnimationFrame(step);
+    window.setTimeout(() => {
+      setDeckGain(fromDeck, 0);
+      setDeckGain(toDeck, 1);
+      resolve();
+    }, duration * 1000);
   });
+}
+
+function setDeckGain(deck, value) {
+  if (!deck.gain) return;
+  // Clear leftover fade automation first: setting a value inside a curve's time range throws.
+  deck.gain.gain.cancelScheduledValues(0);
+  deck.gain.gain.value = value;
+}
+
+function rememberPlay(track) {
+  if (booth.history.at(-1) === track.id) return;
+  booth.history.push(track.id);
+  track.plays += 1;
 }
 
 function nextTrack(useFade) {
@@ -586,12 +609,22 @@ function nextTrack(useFade) {
 }
 
 function previousTrack() {
-  if (!booth.tracks.length) return;
+  if (!booth.tracks.length || isTransitioning) return;
   const active = decks[activeDeck].el;
   if (active.currentTime > 4) {
     active.currentTime = 0;
     return;
   }
+
+  // Go back to the track that actually played before this one, not the one above it in the list.
+  const playedId = booth.history.at(-2);
+  const playedIndex = booth.tracks.findIndex((track) => track.id === playedId);
+  if (playedIndex >= 0) {
+    booth.history.pop();
+    loadTrack(playedIndex, booth.playing, false);
+    return;
+  }
+
   const previous = (booth.currentIndex - 1 + booth.tracks.length) % booth.tracks.length;
   loadTrack(previous, booth.playing, false);
 }
@@ -602,9 +635,13 @@ function chooseNextIndex() {
   }
 
   const target = booth.energy;
-  const candidates = booth.tracks
+  const others = booth.tracks
     .map((track, index) => ({ track, index }))
-    .filter((item) => item.index !== booth.currentIndex)
+    .filter((item) => item.index !== booth.currentIndex);
+  // Every track plays once before any repeats, so Auto DJ can't bounce between two favorites.
+  const fewestPlays = Math.min(...others.map((item) => item.track.plays));
+  const candidates = others
+    .filter((item) => item.track.plays === fewestPlays)
     .map((item) => ({
       ...item,
       score: Math.abs(item.track.energy - target) - item.track.votes * 8,
