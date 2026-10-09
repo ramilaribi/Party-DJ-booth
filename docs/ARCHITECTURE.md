@@ -49,19 +49,53 @@ Downloaded search results are different: the server downloads them into `music-d
 
 ## Realtime Flow
 
-1. Mac opens `/`.
-2. Phone opens `/?remote=1`.
-3. Both connect to Socket.IO.
-4. Mac registers as `display`.
-5. Phone registers as `remote`.
-6. Mac broadcasts state with `display:state`.
-7. Phone sends commands with `remote:command`.
-8. Server broadcasts commands as `player:command`.
-9. Mac handles commands and rebroadcasts updated state.
+1. Mac opens `http://localhost:4242/`.
+2. Phone opens `/?remote=1&session=<code>` from the QR code.
+3. Both connect to Socket.IO and declare their role in the handshake: `display` for the Mac, `remote` plus the session code for the phone.
+4. The server checks the role before accepting the socket (see [Access Control](#access-control)).
+5. Mac broadcasts state with `display:state`.
+6. Phone sends commands with `remote:command`.
+7. Server broadcasts commands as `player:command`.
+8. Mac handles commands and rebroadcasts updated state.
 
-Clients register on every `connect` event, not only at page load. After a Wi-Fi drop or a server restart, Socket.IO reconnects with a new socket, and the server only knows its role once it registers again.
+Socket.IO resends the handshake on every reconnect, so after a Wi-Fi drop the server checks the role again and counts the device correctly. After a server restart the session code is new, so phones with the old link are refused and show **Scan the QR code again**.
 
-The server works out the display and phone counts by counting live sockets by role each time someone registers or disconnects. It then sends them out as a `presence` event. Recounting instead of keeping running totals means reconnects and repeat registrations cannot push the counts out of sync.
+The server works out the display and phone counts by counting live sockets by role each time a socket connects or disconnects. It then sends them out as a `presence` event. Recounting instead of keeping running totals means reconnects cannot push the counts out of sync.
+
+## Access Control
+
+The server trusts two kinds of clients.
+
+**The booth** is a browser on this Mac at `localhost`. A request counts as the booth only when all three hold:
+
+- It comes from a loopback address (`127.0.0.1` or `::1`).
+- Its `Host` header is `localhost`, `127.0.0.1`, or `[::1]`. This stops a DNS-rebinding web page, which reaches the server from the Mac but under its own host name, from posing as the booth.
+- Its `Origin` header, if any, matches the `Host`. Browsers send `Origin` on cross-site requests and on every WebSocket handshake. CORS does not cover WebSockets, so this check is what keeps other websites out.
+
+**A paired phone** carries the session code from the QR link: in the Socket.IO handshake (`auth.session`) and in the `X-Party-Session` header on API calls. The code is 6 random bytes (`crypto.randomBytes`), regenerated on every server start, and compared in constant time. The `Origin` check applies here too.
+
+| Route or event | Booth | Paired phone | Anyone else |
+| --- | --- | --- | --- |
+| Static page files | yes | yes | yes |
+| Socket as `display`, `display:state` | yes | no | no |
+| Socket as `remote`, `remote:command` | yes | yes | no |
+| `GET /api/search`, `POST /api/download` | yes | yes | no |
+| `GET /api/session` (QR code and session code) | yes | no | no |
+| `GET /api/downloads`, `/music/*` | yes | no | no |
+
+Refused sockets get a `not-authorized` connect error, which the page turns into a plain message. Refused API calls get HTTP 403.
+
+## Open-Audio Boundary
+
+Search and download share one Internet Archive filter:
+
+```text
+mediatype:audio
+AND (collection:opensource_audio OR collection:netlabels OR collection:etree)
+AND NOT collection:stream_only
+```
+
+The user's search text is wrapped in parentheses before the filter is added. Before downloading, the server runs the same filtered search for `identifier:"<id>"` and refuses the download unless the item is found. So anything search can show can be downloaded, and nothing else.
 
 ## Audio Graph
 
@@ -141,6 +175,7 @@ Playlist files are not stored permanently. You choose them again when you start 
 - Keeps a small `.music-library.json` manifest.
 - Keeps the latest public booth state in memory.
 - Relays remote commands.
+- Decides who is the booth and who is a paired phone.
 
 `public/app.js`
 

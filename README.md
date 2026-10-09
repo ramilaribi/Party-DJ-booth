@@ -32,6 +32,8 @@ http://localhost:4242
 
 On the Mac screen, choose your audio files or a music folder. Then scan the QR code with your phone while both devices are on the same Wi-Fi.
 
+The QR link carries a session code that pairs your phone with the booth. The code changes every time the server starts, so scan the QR code again after a restart.
+
 > **Important:** press Play on the Mac once after loading music. Browsers require one local click before a page can play audio. After that, the phone remote can control the booth.
 
 ## What You Get
@@ -81,7 +83,7 @@ Use the Find Music card on the Mac or phone.
 4. The file is saved into `music-downloads/`.
 5. The downloaded track is added to the live queue.
 
-This feature searches Internet Archive open audio collections such as open source audio, netlabels, and the Live Music Archive. Files larger than 60 MB are skipped. It is designed for legal downloadable tracks, not copyrighted commercial music ripping.
+This feature searches Internet Archive open audio collections such as open source audio, netlabels, and the Live Music Archive. Items marked stream-only are left out, and files larger than 60 MB are skipped. The server only downloads items that this search can return, so other Internet Archive items are refused. It is designed for legal downloadable tracks, not copyrighted commercial music ripping.
 
 ## Supported Music
 
@@ -144,14 +146,20 @@ Crossfades run on the browser's audio clock, so they still finish if the booth w
 Try these checks:
 
 - Make sure phone and Mac are on the same Wi-Fi.
-- Use the exact phone link shown under the QR code.
+- Use the exact phone link shown under the QR code. It includes the session code.
+- If the phone says **Scan the QR code again**, the server was restarted and the code changed. Scan the new QR code on the Mac.
 - Keep the server terminal open.
 - If macOS asks about accepting network connections, allow it.
 - If hotel, venue, or guest Wi-Fi blocks device-to-device traffic, use a personal hotspot or your own router.
 
 ## Network Safety
 
-The phone remote has no password. Anyone on the same Wi-Fi who opens the remote link can control the booth and trigger downloads. Run the booth on your own network or a personal hotspot, not on shared public Wi-Fi.
+- **Phones need the QR code.** The remote link carries a random session code. Devices on the Wi-Fi without it cannot control the booth, search, download, or read your downloaded files.
+- **The booth only runs on the Mac.** Open it at `http://localhost:4242`. Opening the booth from another device, or through the Mac's network address, shows **Open the booth on the Mac**.
+- **Only the booth sets what is playing.** Phones send commands such as Next or Vote, and the booth decides.
+- **Other websites are shut out.** A web page open in the Mac's browser cannot connect to the booth or read the session code.
+
+Anyone you give the QR code or link to can control the booth until the server restarts. Run the booth on your own network or a personal hotspot, not on shared public Wi-Fi.
 
 ## Development
 

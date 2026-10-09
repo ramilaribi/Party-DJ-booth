@@ -31,8 +31,10 @@ http://localhost:4242
 Current phone remote URL format:
 
 ```text
-http://<mac-lan-ip>:4242/?remote=1
+http://<mac-lan-ip>:4242/?remote=1&session=<code>
 ```
+
+The session code is random and changes every time the server starts. The QR code on the booth and the terminal output always show the current link.
 
 ## Current Status
 
@@ -66,7 +68,10 @@ Fixed on 2026-10-09:
 - **Auto DJ repeated two songs.** It only excluded the current track, so with similar energy tags it alternated between the same two songs forever. Tracks now count their plays, and Auto DJ picks from the least-played ones, so every track plays once before any repeats. Prev now uses the real play history instead of list order.
 - **Crossfades froze in hidden tabs.** Fades ran on `requestAnimationFrame`, which stops when the tab is hidden or the screen sleeps. The booth then went silent and ignored Next. Fades are now scheduled on the `AudioContext` clock.
 - **Energy tags were wiped.** Saving a tag rewrote the stored tags from only the tracks loaded that session, and downloaded tracks never read their saved tag. `saveTrackPrefs` now merges one track's tag into what is stored, and downloads read their tag on load.
-- **Phone count drifted after reconnects.** Clients registered once at page load, and the server kept running totals. Clients now register on every connect, and the server counts live connections instead.
+- **Phone count drifted after reconnects.** Clients registered once at page load, and the server kept running totals. Clients now declare their role in the Socket.IO handshake, which is resent on every reconnect, and the server counts live connections instead.
+- **Session code was never checked.** Any device on the Wi-Fi could control the booth, search, download, and read the session code from `/api/session`. Phones now need the code from the QR link, and the booth must be a browser on the Mac at `localhost`. The code is now 6 random bytes from `crypto` instead of `Math.random`.
+- **Any socket could overwrite party state.** Only the booth may send `display:state` now. The permissive Socket.IO CORS setting is gone, and every handshake and API call must come from the same origin, so other websites open in the Mac's browser cannot connect. A `Host` check also stops DNS-rebinding pages from posing as the booth.
+- **Downloads ignored the open-audio boundary.** `/api/download` accepted any Internet Archive item. It now runs the same filtered search as the search box and refuses anything not found. Stream-only items are excluded from both, and the search text is wrapped in parentheses. Note: the "OR escapes the filter" risk from the code review did not reproduce, because the Internet Archive search kept the filter applied, so the parentheses are a safeguard rather than a fix.
 
 How the fixes were verified:
 
@@ -77,27 +82,32 @@ How the fixes were verified:
 - An offline Web Audio render confirmed the fade curves and final gains.
 - A tag on a downloaded track survived a reload, and survived a session where that track was not loaded.
 - After a server restart, the booth showed the right phone count as phones joined and left. A scripted client also confirmed that repeat registration and a dropped connection count correctly.
+- A scripted security test plays the booth, a paired phone, an unpaired Wi-Fi device (connecting through the Mac's network address), and a malicious web page (foreign `Origin`, spoofed `Host`). On the old code 10 of 16 checks failed, and the old server downloaded a LibriVox audiobook from outside the open collections. On the new code all 20 checks pass, including refusing a stream-only item and a 78rpm record, while a paired phone can still search and download open audio.
+- In the browser, the booth at `localhost` connected and showed a QR link with the code, and a remote page linked, searched, and sent Hype.
 
-Not verified yet: real music on real speakers. Do the hidden-window crossfade check in [docs/WEEKEND_RUNBOOK.md](docs/WEEKEND_RUNBOOK.md) before the party.
+Not verified yet:
+
+- Real music on real speakers. Do the hidden-window crossfade check in [docs/WEEKEND_RUNBOOK.md](docs/WEEKEND_RUNBOOK.md) before the party.
+- A real phone scanning the QR code. The in-app browser used for testing would not open the Mac's network address, so the phone-side "Scan the QR code again" message was only checked by the scripted test, not on screen.
 
 ## Known Issues
 
 Found in the 2026-10-09 code review and not fixed yet, most important first:
 
-1. **Session code is never checked.** The code in the QR link is generated but not verified, so any device on the Wi-Fi can control the booth and trigger downloads.
-2. **Any socket can overwrite party state.** `display:state` is accepted without checking the sender's role, and Socket.IO allows any origin (`cors: { origin: true }`).
-3. **Open-audio boundary is not enforced on download.** The search query is not wrapped in parentheses, so words like `OR` can escape the collection filter. `/api/download` accepts any Internet Archive identifier.
-4. **Cue plays immediately.** It jumps to the song instead of queueing it next. The docs now describe this behavior; decide whether a real "play next" action is wanted.
-5. **Large libraries are slow.** Each imported file triggers a full queue re-render and a full playlist broadcast. The whole playlist is also resent every 700 ms.
-6. **Two booth tabs both play.** Every remote command reaches every open booth tab.
-7. **Remote sliders jump while dragging.** Incoming state resets the phone's slider values mid-drag.
-8. **Download leftovers.** A failed download leaves a `.download` temp file. Parallel downloads of the same file share one temp path.
+1. **Cue plays immediately.** It jumps to the song instead of queueing it next. The docs now describe this behavior; decide whether a real "play next" action is wanted.
+2. **Large libraries are slow.** Each imported file triggers a full queue re-render and a full playlist broadcast. The whole playlist is also resent every 700 ms.
+3. **Two booth tabs both play.** Every remote command reaches every open booth tab.
+4. **Remote sliders jump while dragging.** Incoming state resets the phone's slider values mid-drag.
+5. **Download leftovers.** A failed download leaves a `.download` temp file. Parallel downloads of the same file share one temp path.
+6. **Pairing ends when the server restarts.** The session code is regenerated on every start, so phones must scan the QR code again. This is safer, but an installed PWA would need a way to keep or renew pairing.
 
 ## Important Boundary
 
 The app must not become a copyrighted music ripper.
 
 The current search/download feature is intentionally scoped to legal open-audio sources such as Internet Archive open audio collections. Commercial music from Spotify, Apple Music, YouTube, SoundCloud, etc. should not be downloaded unless an official licensed API or user-owned local file flow is added.
+
+The server enforces this on both search and download (see the Open-Audio Boundary section in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). One caveat: `opensource_audio` (Community Audio) is user-uploaded and not rights-checked by the Internet Archive. Netlabels and the Live Music Archive are curated. Decide whether Community Audio should stay in the filter or be limited to items with a license URL.
 
 ## How To Run
 
@@ -175,7 +185,7 @@ Recommended future behavior:
 2. Controller QR opens:
 
 ```text
-http://<mac-lan-ip>:4242/?remote=1
+http://<mac-lan-ip>:4242/?remote=1&session=<code>
 ```
 
 3. Install QR opens:
@@ -197,9 +207,11 @@ Important limitation:
 
 ## Recommended Next Dev Task
 
-Before new features, fix Known Issues 1–3: who can control the booth and what it can download.
+The network-safety issues from the code review are fixed.
 
-Then build a PWA install mode:
+On 2026-10-09 the owner asked for bigger features: YouTube search and playback, DJ mixing, and voice control. Their scope and order are still being agreed, so check with the owner before starting. Downloading from YouTube stays out of scope under the Important Boundary above.
+
+The earlier plan was a PWA install mode:
 
 - Add `public/manifest.webmanifest`.
 - Add app icons.

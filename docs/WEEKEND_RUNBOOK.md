@@ -14,7 +14,7 @@ Use this when you are setting up before people arrive.
 npm start
 ```
 
-6. Open:
+6. Open this exact address on the Mac. The booth only runs at `localhost`:
 
 ```text
 http://localhost:4242
@@ -72,7 +72,7 @@ If audio stops:
 If the phone remote disconnects:
 
 1. Keep music playing on the Mac.
-2. Re-scan the QR code.
+2. Re-scan the QR code. After a server restart this is required, because the session code in the link changes.
 3. Check same Wi-Fi.
 
 If Wi-Fi blocks the phone:
