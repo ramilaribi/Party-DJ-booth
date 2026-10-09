@@ -48,6 +48,8 @@ The Mac booth has:
 - Real audio playback in the browser.
 - Play, pause, previous, next, and hype controls, plus a master volume.
 - Voice control: press Talk (or V) and say a command.
+- DJ mixer: two decks with bass/mid/treble EQ, a filter sweep, tempo with key lock, automatic BPM detection, Sync, and a hot cue.
+- Auto mix with beat-matched crossfades, or Manual mix with a crossfader.
 - Crossfades between tracks, including between your files and YouTube.
 - Energy control and an Auto DJ that plays every track before repeating.
 - Queue with cue, vote, and energy tagging.
@@ -148,10 +150,44 @@ You can also type any command in either box.
 | "peak", "groove", "warm up", "afterglow" | Jump to a room mode |
 | "hype", "drop the beat" | Hype moment |
 | "crossfade 8 seconds", "auto DJ off" | Booth settings |
+| "manual mix", "auto mix", "fade" | Mixer mode, and an auto fade in Manual mix |
 | "play One More Time by Daft Punk" | Plays it now: from the queue if it's there, otherwise YouTube's top result |
 | "add Get Lucky to the queue" | Adds YouTube's top result to the queue |
 
 Starting with "hey DJ" or ending with "please" is fine. Commands are in English, and the Mac listens in English whatever your system language is.
+
+## DJ Mixing
+
+The Mixer panel under the stage has deck A, deck B, and the controls between them. It works with your own files and open-audio downloads. YouTube songs play through YouTube's player, so they skip the mixer.
+
+### Auto mix (default)
+
+The booth crossfades for you. With **Beat match** on, it lines up the next song's tempo and beats with the current one before fading. Afterwards it drifts back to the song's own tempo over 8 seconds. Beat matching needs both tempos within 8% of each other, counting half and double time. Otherwise it does a normal crossfade.
+
+### Manual mix
+
+1. Click **Manual mix**. The crossfader unlocks, and each queue row gets **A** and **B** buttons.
+2. Load a song onto the deck the room isn't hearing, with its A or B button.
+3. Press that deck's **Play**, and **Sync** to match its tempo and beats to the other deck.
+4. Move the **crossfader**, or press **Auto fade** to glide across over your crossfade time.
+
+Next, Cue, Play now, and voice song requests still work. They load the song on the free deck and fade over. With **Auto DJ flow** on, the booth also fades to the next song by itself if the live deck is about to end and the other deck isn't playing, so the music never stops.
+
+### Deck controls
+
+| Control | What it does |
+| --- | --- |
+| BPM | Detected automatically the first time a song is loaded or comes up next, then remembered |
+| Tempo | ±8%. The readout shows the BPM you're playing at |
+| Key lock | Keeps the pitch steady when you change tempo (on by default) |
+| High, Mid, Low | EQ from −26 dB (nearly a kill) to +6 dB |
+| Filter | Left sweeps a low-pass, right a high-pass, center is open |
+| Cue | Click to set a cue point, click again to jump back to it, right-click to clear it |
+| Sync | Matches this deck's tempo (and beats, when both play) to the other deck |
+
+Double-click any slider to put it back in the middle.
+
+BPM detection works best on music with a steady beat, which covers most dance music. Songs without a clear beat show "no steady beat" and simply aren't beat-matched.
 
 ## Party Controls
 
@@ -227,7 +263,7 @@ Anyone you give the QR code or link to can control the booth until the server re
 | `npm start`     | Runs the server on port 4242.              |
 | `npm run dev`   | Runs the server and restarts on changes.   |
 | `npm run check` | Syntax-checks the server and browser code. |
-| `npm test`      | Runs the voice command tests.              |
+| `npm test`      | Runs the voice and mixing tests.           |
 
 Use another port with `PORT=5000 npm start`.
 
@@ -237,8 +273,10 @@ Use another port with `PORT=5000 npm start`.
 server.js                 Local web server, phone sync, search and download API
 public/index.html         Booth and remote markup
 public/styles.css         Visual design and responsive layout
-public/app.js             Player, queue, crossfade, Auto DJ, visualizer, voice, remote logic
+public/app.js             Player, queue, mixer, Auto DJ, visualizer, voice, remote logic
+public/mixing.js          BPM detection, beat matching, crossfader and filter curves
 public/voice.js           Voice command parser and song matching
+test/mixing.test.js       Tests for the mixing maths and BPM detection
 test/voice.test.js        Tests for the voice command parser
 docs/WEEKEND_RUNBOOK.md   Practical party checklist
 docs/ARCHITECTURE.md      Technical structure

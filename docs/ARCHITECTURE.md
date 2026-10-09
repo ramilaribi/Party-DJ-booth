@@ -20,6 +20,7 @@ Mac browser
     Web Audio graph
     two audio decks + a YouTube deck (IFrame player)
     crossfades between any two decks
+    mixer: EQ, filter, tempo, BPM analysis, beat matching, Manual mix
     master volume
     voice commands (Web Speech API, push-to-talk)
     visualizer canvas
@@ -28,6 +29,9 @@ Mac browser
 
   public/voice.js
     voice command parser and song matching (pure, unit-tested)
+
+  public/mixing.js
+    BPM detection, beat grids, tempo matching, crossfader and filter curves (pure, unit-tested)
 
 Phone browser
   public/app.js
@@ -121,11 +125,14 @@ The booth has three decks with the same interface (`load`, `play`, `pause`, `sto
 
 ### Audio decks
 
-Both route through:
+Each one is a mixer channel:
 
 ```text
-MediaElementSource -> deck GainNode -> AnalyserNode -> master GainNode -> speakers
+MediaElementSource -> low shelf (200 Hz) -> peaking (1 kHz) -> high shelf (3.5 kHz)
+  -> sweep filter -> deck fader GainNode -> AnalyserNode -> master GainNode -> speakers
 ```
+
+Tempo is the element's `playbackRate` (±8%). Key lock is `preservesPitch`. A new `src` resets the rate, so `load` sets it back explicitly. Each deck also keeps the track it holds (`deck.track`) and its hot cue.
 
 The `AnalyserNode` drives the canvas visualizer. It sits before the master gain, so the bars keep moving when the volume is low. Master volume changes ramp with `setTargetAtTime` to avoid clicks. The YouTube deck applies the same master volume by multiplying it into the player volume. Fades are scheduled on the `AudioContext` clock with `setValueCurveAtTime`, using a smoothstep shape over the crossfade length. Before any direct gain change, `setLevel` clears leftover fade automation, because in Web Audio setting a value inside a scheduled curve's time range throws `NotSupportedError`.
 
@@ -175,6 +182,37 @@ Auto DJ starts the crossfade when the remaining time drops to the crossfade leng
 
 For YouTube tracks, Auto DJ only trusts the player's reported length when it is within 5 seconds of the length search returned. During an ad, the player can report the ad's length, which would otherwise start the next song early.
 
+## Mixing
+
+### BPM detection
+
+`detectBpm` in `public/mixing.js`:
+
+1. Low-pass the audio around 150 Hz to favour kick drums.
+2. Measure energy in 5 ms frames, and take the positive jumps between frames as an onset envelope.
+3. Autocorrelate the envelope over beat lengths for 80–170 BPM. A gentle preference for tempos near 120 settles half/double-time ambiguity.
+4. Refine the peak with a parabola, for tenths of a BPM.
+5. Find the beat grid's offset from the first 16 beats.
+
+It returns `{ bpm, firstBeat, confidence }`, or `null` for silence or short clips. Tracks below confidence 2 count as "no steady beat". On synthetic drum loops the tests check tempo within ±0.5 BPM; the beat position lands within about 5 ms.
+
+The booth analyses only what's playing and what's next (`ensureBpm`, one at a time, because decoding a whole song uses a lot of memory). It decodes at 22.05 kHz, listens to one minute starting a quarter of the way in, and saves `bpm` and `firstBeat` with the track's prefs, so each song is analysed once.
+
+### Beat matching
+
+`beatMatchPlan(outDeck, track)` uses `matchRate` to find a playback rate within 8% that matches the outgoing deck's playing BPM, including half and double time. It also picks a start time whose beat phase equals the outgoing deck's. After the incoming deck starts, `alignBeats` corrects the start-up delay with one small seek while the incoming deck is still nearly silent.
+
+In Auto mix, the incoming deck then eases back to 100% over 8 seconds once the fade ends. In Manual mix, tempo stays where Sync or the DJ put it.
+
+### Manual mix
+
+- The crossfader sets both deck faders with an equal-power curve (`crossfaderGains`). It ramps with `setTargetAtTime`, so dragging doesn't click.
+- The **live deck** is the crossfader's side, unless only the other deck is playing. `updateLiveDeck` keeps `activeDeck`, `booth.currentIndex`, and `booth.playing` in step, so the stage, the phone, and voice all follow it.
+- **Auto fade** starts the far deck (on beat when possible) and moves the crossfader on a 40 ms timer. When it finishes, it pauses the deck that faded out.
+- Play, Next, Cue, Play now, and voice requests are routed through `manualToggle` and `manualPlay`. Those load the free deck and auto fade. Prev restarts the live deck. A YouTube request switches back to Auto mix, because YouTube can't go through the mixer.
+- **Safety net:** with Auto DJ on, if the live deck is about to end and the other deck is idle, the booth runs `manualPlay` on the next song.
+- Switching back to Auto mix keeps the live deck and stops the other. Switching is refused during a crossfade, and Manual mix is refused while YouTube plays.
+
 ## Voice Commands
 
 ```text
@@ -197,6 +235,8 @@ Prev restarts the current song if it is more than 4 seconds in. Otherwise it pop
 
 Local browser storage keeps:
 
+- mix mode (Auto or Manual) and the Beat match setting
+- each track's detected BPM and beat offset
 - master volume
 - energy setting
 - crossfade setting
@@ -236,6 +276,10 @@ Playlist files are not stored permanently. You choose them again when you start 
 - Renders booth and remote screens.
 - Syncs state over Socket.IO.
 
+`public/mixing.js`
+
+- Detects BPM and beat offsets, matches tempos, and shapes the crossfader and filter.
+
 `public/voice.js`
 
 - Parses voice commands and matches song requests against the queue.
@@ -254,7 +298,10 @@ YouTube has a second limit: a browser tab that has never been on screen cannot s
 
 ## Future Upgrade Ideas
 
-- Beat detection and BPM-aware mixing.
+- Loops (4/8/16 beats). Media elements can't seek without a small gap, so loops need an `AudioBufferSourceNode` playback engine with `loopStart`/`loopEnd`.
+- Waveform display with the beat grid.
+- MIDI DJ controller support (Web MIDI).
+- Mixer controls on the phone.
 - Hands-free voice with a wake word ("DJ, next"), and French voice commands.
 - Saved playlist manifests.
 - Guest-only voting links separate from the DJ remote.

@@ -52,6 +52,7 @@ Built and verified:
 - Search and local download from open audio collections.
 - YouTube search and play (added 2026-10-09, see below).
 - Voice control and master volume (added 2026-10-09, see below).
+- DJ mixer: EQ, filter, tempo, BPM detection, beat matching, Manual mix (added 2026-10-09, see below).
 - Private club-style UI redesign.
 - Documentation and weekend runbook.
 
@@ -107,6 +108,10 @@ Found in the 2026-10-09 code review and not fixed yet, most important first:
 9. **A YouTube start can't be retried mid-transition.** A video that times out while starting is skipped for this round and retried in the next one.
 10. **Voice is push-to-talk and English only.** There's no always-listening wake word yet, and the parser only knows English phrases. French commands would need a second pattern set and a language switch for the recognizer.
 11. **Chrome's speech recognition is online.** It sends audio to Google's servers and needs internet. Safari uses on-device macOS Dictation when it's enabled.
+12. **No loops yet.** They need an `AudioBufferSourceNode` playback engine instead of `<audio>` elements.
+13. **BPM detection assumes a steady tempo.** Songs with tempo changes, live drums, or no clear kick may get a wrong BPM or "no steady beat". Beat matching then lands off-beat, or is skipped.
+14. **Manual mix keeps matched tempos.** After Sync or an automatic fade in Manual mix, the deck stays at the matched tempo; only Auto mix eases back. A long Manual mix session can drift away from the songs' original tempos.
+15. **The mixer doesn't cover YouTube.** A YouTube request in Manual mix switches back to Auto mix.
 
 ## Important Boundary
 
@@ -257,7 +262,31 @@ How it was verified:
 
 Not verified yet: a real microphone (needs a person in the room), and phone keyboard dictation on a real phone.
 
-Owner's chosen order for what's next: DJ mixing (manual crossfader, EQ per deck, tempo, BPM detection and beat-matched transitions, cue points and loops).
+**Done on 2026-10-09: DJ mixing.**
+
+- **Each audio deck is a mixer channel:** 3-band EQ, a sweep filter, tempo ±8% with key lock, a hot cue, and Sync.
+- **BPM and beat grids** are detected in the browser (`public/mixing.js`) and saved per track.
+- **Auto mix** beat-matches crossfades when tempos are within 8% (half/double time included), then eases back to the song's own tempo.
+- **Manual mix** adds a crossfader, per-deck Play, A/B load buttons in the queue, Auto fade, and an Auto DJ safety net. Next, Cue, Play now, and voice requests still work by fading to the free deck.
+- **Voice:** "manual mix", "auto mix", and "fade".
+- **Loops were left out on purpose.** Media elements can't seek without a small gap, so loops need an `AudioBufferSourceNode` playback engine. See Future Upgrade Ideas in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+How it was verified:
+
+- 63 unit tests (`npm test`). BPM detection is checked on synthetic drum loops at 90–160 BPM, including hi-hats and noise, plus the beat offset, tempo matching, crossfader power, and filter curves. A test caught a 0.2% frame-rate rounding error that pushed beat positions 30 ms late; it was fixed.
+- In the booth, with drum loops at 120/124/128/100 BPM:
+  - BPMs detected as 120.2/124/128.
+  - An Auto mix Next played the 124 BPM loop at 0.9694× with key lock, with beats within about 0.05 beat, then eased back to 100% over 8 seconds.
+  - A 130.6 → 100 BPM change correctly skipped matching.
+  - Manual mix: loading on B, Sync to −6.1%, and Auto fade across in 5 seconds with beats aligned and the outgoing deck paused.
+  - Tempo, EQ, filter, and hot cue set and jump.
+  - The safety net fading to the next song on its own.
+  - A mode switch refused mid-fade, and switching back to Auto mix stopping the free deck.
+  - No console errors.
+
+Not verified yet: BPM detection on a real music library (the confidence threshold of 2 is a guess), and how the EQ sounds on real speakers.
+
+What's next is open. Options: loops (new playback engine), waveforms, MIDI controller support, mixer controls on the phone, French voice commands, and a hands-free wake word.
 
 On 2026-10-09 the owner asked for bigger features: YouTube search and playback, DJ mixing, and voice control. Their scope and order are still being agreed, so check with the owner before starting. Downloading from YouTube stays out of scope under the Important Boundary above.
 
