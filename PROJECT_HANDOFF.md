@@ -51,6 +51,7 @@ Built and verified:
 - Energy slider and Auto DJ flow.
 - Search and local download from open audio collections.
 - YouTube search and play (added 2026-10-09, see below).
+- Voice control and master volume (added 2026-10-09, see below).
 - Private club-style UI redesign.
 - Documentation and weekend runbook.
 
@@ -104,6 +105,8 @@ Found in the 2026-10-09 code review and not fixed yet, most important first:
 7. **YouTube-to-YouTube is a dip, not an overlap.** One player can't overlap two videos. A second YouTube player would allow a real crossfade, but both would need to stay visible while they play.
 8. **No visualizer or EQ on YouTube tracks.** Their audio stays inside YouTube's cross-origin player and can't reach Web Audio.
 9. **A YouTube start can't be retried mid-transition.** A video that times out while starting is skipped for this round and retried in the next one.
+10. **Voice is push-to-talk and English only.** There's no always-listening wake word yet, and the parser only knows English phrases. French commands would need a second pattern set and a language switch for the recognizer.
+11. **Chrome's speech recognition is online.** It sends audio to Google's servers and needs internet. Safari uses on-device macOS Dictation when it's enabled.
 
 ## Important Boundary
 
@@ -237,7 +240,24 @@ Bugs found and fixed while testing:
 
 Not verified yet: a full party-length session, ads in practice, and the phone remote on a real phone.
 
-Owner's chosen order for what's next: voice control on the Mac and phone (the phone needs HTTPS for the microphone), then DJ mixing.
+**Done on 2026-10-09: voice control and master volume.**
+
+- **Mac:** push-to-talk with the Web Speech API (Talk button or the V key).
+- **Phone:** a command box filled by the phone keyboard's dictation key. The owner first agreed to local HTTPS, so the phone page could use the microphone directly. The keyboard route gives the same result with no certificate to install, so HTTPS was skipped. A Talk button appears on any page served securely.
+- Commands are parsed in `public/voice.js` and always run on the booth. See Voice Commands in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- "Louder" needed something to control, so there is now a master volume. It's a Web Audio gain after the analyser, also applied to the YouTube player, with sliders on the Mac and the phone.
+
+How it was verified:
+
+- 44 unit tests for the parser and song matching (`npm test`). They caught "one more night" matching the queued "One More Time", which raised the match bar to 75%.
+- In the booth, typed commands: play, volume, quieter, mute/unmute, energy, modes, crossfade, Auto DJ, hype, a song from the queue, a song through YouTube (mock search), a song with no results, pause, and non-commands.
+- With a stand-in speech recognizer: the V key, the listening state, interim text, picking the alternative that parses ("next sun" vs "next song"), and the blocked-microphone message.
+- From a phone page: a typed command ran on the booth and its answer came back. A phone that joins later doesn't show an older answer.
+- The 16 network-safety checks still pass.
+
+Not verified yet: a real microphone (needs a person in the room), and phone keyboard dictation on a real phone.
+
+Owner's chosen order for what's next: DJ mixing (manual crossfader, EQ per deck, tempo, BPM detection and beat-matched transitions, cue points and loops).
 
 On 2026-10-09 the owner asked for bigger features: YouTube search and playback, DJ mixing, and voice control. Their scope and order are still being agreed, so check with the owner before starting. Downloading from YouTube stays out of scope under the Important Boundary above.
 

@@ -20,13 +20,19 @@ Mac browser
     Web Audio graph
     two audio decks + a YouTube deck (IFrame player)
     crossfades between any two decks
+    master volume
+    voice commands (Web Speech API, push-to-talk)
     visualizer canvas
     queue state
     remote command handler
 
+  public/voice.js
+    voice command parser and song matching (pure, unit-tested)
+
 Phone browser
   public/app.js
     remote UI
+    voice command box (keyboard dictation)
     Socket.IO command sender
     live state renderer
 ```
@@ -118,10 +124,10 @@ The booth has three decks with the same interface (`load`, `play`, `pause`, `sto
 Both route through:
 
 ```text
-MediaElementSource -> GainNode -> AnalyserNode -> speakers
+MediaElementSource -> deck GainNode -> AnalyserNode -> master GainNode -> speakers
 ```
 
-The `AnalyserNode` drives the canvas visualizer. Fades are scheduled on the `AudioContext` clock with `setValueCurveAtTime`, using a smoothstep shape over the crossfade length. Before any direct gain change, `setLevel` clears leftover fade automation, because in Web Audio setting a value inside a scheduled curve's time range throws `NotSupportedError`.
+The `AnalyserNode` drives the canvas visualizer. It sits before the master gain, so the bars keep moving when the volume is low. Master volume changes ramp with `setTargetAtTime` to avoid clicks. The YouTube deck applies the same master volume by multiplying it into the player volume. Fades are scheduled on the `AudioContext` clock with `setValueCurveAtTime`, using a smoothstep shape over the crossfade length. Before any direct gain change, `setLevel` clears leftover fade automation, because in Web Audio setting a value inside a scheduled curve's time range throws `NotSupportedError`.
 
 ### YouTube deck
 
@@ -169,6 +175,18 @@ Auto DJ starts the crossfade when the remaining time drops to the crossfade leng
 
 For YouTube tracks, Auto DJ only trusts the player's reported length when it is within 5 seconds of the length search returned. During an ad, the player can report the ad's length, which would otherwise start the next song early.
 
+## Voice Commands
+
+```text
+Mac:   Talk button / V key -> SpeechRecognition (en-US, 3 alternatives) -> runVoiceCommand
+Phone: keyboard dictation -> voice box -> remote:command {type: "voice", text} -> booth -> runVoiceCommand
+```
+
+- **Parsing** lives in `public/voice.js`. `parseVoiceCommand` normalizes the text (case, punctuation, a leading "hey DJ", a trailing "please"), then matches it against an ordered list of patterns. It returns an action such as `{ action: "volume", delta: 15 }` or `{ action: "playSong", query }`, or `null`. It has no side effects, so `npm test` runs it in Node (`test/voice.test.js`).
+- **Running** happens only on the booth. `runVoiceCommand` maps each action to the same setters the sliders and phone commands use (`setVolume`, `setEnergy`, `setCrossfade`, `setAutoDj`), or to next, previous, play/pause, and hype. The result goes into the booth message as `Voice: …`, so every phone sees it. The phone that sent the command shows it under its voice box.
+- **Song requests** first look in the queue with `findQueuedTrack`. A track matches when at least 75% of the request's words (ignoring filler like "the", "by", "song") appear in its title and artist. The bar is high because a wrong match is worse than falling back to YouTube's top result.
+- **Speech recognition** needs a secure page, so the Talk button only appears where `window.isSecureContext` is true and the browser has the Web Speech API. The booth at `localhost` qualifies; a phone on `http://<lan-ip>` does not. That's why the phone uses its keyboard's dictation instead, which works in any text box. When the recognizer offers several transcripts, the first one that parses as a command wins, because recognizers often rank a near miss first.
+
 ## Play History
 
 `rememberPlay` records each track that becomes current and increments its play count. Re-cueing the current track does not count twice.
@@ -179,6 +197,7 @@ Prev restarts the current song if it is more than 4 seconds in. Otherwise it pop
 
 Local browser storage keeps:
 
+- master volume
 - energy setting
 - crossfade setting
 - Auto DJ setting
@@ -212,9 +231,14 @@ Playlist files are not stored permanently. You choose them again when you start 
 - Handles music search (open audio and YouTube), downloads, and YouTube queueing.
 - Controls playback through the deck interface.
 - Runs crossfades and YouTube dips.
+- Listens for voice commands and runs them (booth), or forwards them (phone).
 - Draws the visualizer.
 - Renders booth and remote screens.
 - Syncs state over Socket.IO.
+
+`public/voice.js`
+
+- Parses voice commands and matches song requests against the queue.
 
 `public/styles.css`
 
@@ -231,6 +255,7 @@ YouTube has a second limit: a browser tab that has never been on screen cannot s
 ## Future Upgrade Ideas
 
 - Beat detection and BPM-aware mixing.
+- Hands-free voice with a wake word ("DJ, next"), and French voice commands.
 - Saved playlist manifests.
 - Guest-only voting links separate from the DJ remote.
 - Album art extraction.

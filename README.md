@@ -46,7 +46,8 @@ The Mac booth has:
 - YouTube search and play through YouTube's official player, with the video on the stage.
 - Full-screen style now-playing stage with a canvas party visualizer.
 - Real audio playback in the browser.
-- Play, pause, previous, next, and hype controls.
+- Play, pause, previous, next, and hype controls, plus a master volume.
+- Voice control: press Talk (or V) and say a command.
 - Crossfades between tracks, including between your files and YouTube.
 - Energy control and an Auto DJ that plays every track before repeating.
 - Queue with cue, vote, and energy tagging.
@@ -57,7 +58,8 @@ The phone remote has:
 - Play, pause, previous, next, and hype controls.
 - Music search and download to the Mac.
 - YouTube search with Play now and Add to queue on the booth.
-- Energy and crossfade sliders.
+- Voice commands through the phone keyboard's dictation key.
+- Volume, energy, and crossfade sliders.
 - Live now-playing progress.
 - Queue browsing with cue and vote actions.
 
@@ -127,7 +129,35 @@ Good to know:
 - Open the booth in a visible window. Browsers block a video from starting with sound in a tab that has never been on screen.
 - If the terminal says `YouTube search: off`, the server didn't find the key. Check `.env` and restart the server.
 
+## Voice Control
+
+Talk to the booth from the Mac or your phone.
+
+**On the Mac:** press **Talk** in the Voice card, or the **V** key, and say a command. The first time, the browser asks for the microphone. Chrome needs an internet connection for speech recognition. Safari uses macOS Dictation, so turn it on in System Settings > Keyboard.
+
+**On the phone:** tap the Voice box, tap the **microphone on your keyboard** (iPhone and Android keyboards both have one), say the command, and tap **Go**. The booth runs it and the answer shows under the box. This uses your phone's own dictation, so it works over the normal Wi-Fi link with no setup.
+
+You can also type any command in either box.
+
+| Say | What happens |
+| --- | --- |
+| "next", "skip", "go back" | Next or previous song |
+| "pause", "stop the music", "play", "resume" | Pause or resume |
+| "louder", "quieter", "volume 60", "mute", "unmute" | Master volume |
+| "more energy", "calm it down", "energy 75" | Energy target |
+| "peak", "groove", "warm up", "afterglow" | Jump to a room mode |
+| "hype", "drop the beat" | Hype moment |
+| "crossfade 8 seconds", "auto DJ off" | Booth settings |
+| "play One More Time by Daft Punk" | Plays it now: from the queue if it's there, otherwise YouTube's top result |
+| "add Get Lucky to the queue" | Adds YouTube's top result to the queue |
+
+Starting with "hey DJ" or ending with "please" is fine. Commands are in English, and the Mac listens in English whatever your system language is.
+
 ## Party Controls
+
+### Volume
+
+The master volume slider (Mac and phone) sets the level for both your files and YouTube. It's saved on the Mac. Use it together with the Mac's own volume: keep the Mac fairly high and ride the booth slider during the party.
 
 ### Energy
 
@@ -196,7 +226,8 @@ Anyone you give the QR code or link to can control the booth until the server re
 | --------------- | ------------------------------------------ |
 | `npm start`     | Runs the server on port 4242.              |
 | `npm run dev`   | Runs the server and restarts on changes.   |
-| `npm run check` | Syntax-checks `server.js` and `app.js`.    |
+| `npm run check` | Syntax-checks the server and browser code. |
+| `npm test`      | Runs the voice command tests.              |
 
 Use another port with `PORT=5000 npm start`.
 
@@ -206,7 +237,9 @@ Use another port with `PORT=5000 npm start`.
 server.js                 Local web server, phone sync, search and download API
 public/index.html         Booth and remote markup
 public/styles.css         Visual design and responsive layout
-public/app.js             Player, queue, crossfade, Auto DJ, visualizer, remote logic
+public/app.js             Player, queue, crossfade, Auto DJ, visualizer, voice, remote logic
+public/voice.js           Voice command parser and song matching
+test/voice.test.js        Tests for the voice command parser
 docs/WEEKEND_RUNBOOK.md   Practical party checklist
 docs/ARCHITECTURE.md      Technical structure
 PROJECT_HANDOFF.md        Project status, known issues, and next steps

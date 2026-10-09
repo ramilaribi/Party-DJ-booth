@@ -42,6 +42,7 @@ Check:
 - Crossfade still works with the booth hidden: put another window in front during a fade and listen for the next song coming in.
 - The QR code opens the remote.
 - A YouTube song plays with sound, and crossfades in and out of one of your own files.
+- Voice works: press V on the Mac and say "next". Allow the microphone if the browser asks. On the phone, try "louder" with the keyboard mic.
 - YouTube volume sits close to your files. If YouTube is much louder or quieter, adjust the Mac volume for the mix you'll play most.
 - The Mac does not sleep.
 
@@ -59,6 +60,8 @@ Start around energy 40-55. Move toward 75-90 when people are dancing.
 Use Auto DJ when the room is moving well. It plays every track once before repeating, so load enough music to cover the night.
 
 Use Cue from the phone when a specific song should play right now. It crossfades straight into that song.
+
+Use voice when your hands are busy: "next", "louder", "more energy", or "play" and a song name. Speak close to the microphone. A loud room makes the Mac's built-in mic guess wrong, and the phone's keyboard mic held near your mouth works better.
 
 Use votes as a signal, not a command. If a song gets votes but would kill the room, leave it for later.
 
