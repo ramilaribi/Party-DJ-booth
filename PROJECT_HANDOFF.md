@@ -65,14 +65,18 @@ Fixed on 2026-10-09:
 
 - **Auto DJ repeated two songs.** It only excluded the current track, so with similar energy tags it alternated between the same two songs forever. Tracks now count their plays, and Auto DJ picks from the least-played ones, so every track plays once before any repeats. Prev now uses the real play history instead of list order.
 - **Crossfades froze in hidden tabs.** Fades ran on `requestAnimationFrame`, which stops when the tab is hidden or the screen sleeps. The booth then went silent and ignored Next. Fades are now scheduled on the `AudioContext` clock.
+- **Energy tags were wiped.** Saving a tag rewrote the stored tags from only the tracks loaded that session, and downloaded tracks never read their saved tag. `saveTrackPrefs` now merges one track's tag into what is stored, and downloads read their tag on load.
+- **Phone count drifted after reconnects.** Clients registered once at page load, and the server kept running totals. Clients now register on every connect, and the server counts live connections instead.
 
 How the fixes were verified:
 
-- Both bugs were reproduced first on the original code, in a separate test copy with six silent test tracks.
+- Every bug was reproduced first on the code before its fix, in a separate test copy with six silent test tracks.
 - With animation frames disabled for the whole run, Auto DJ played all six tracks in a full round and started a second one.
 - Prev stepped back through the real play history.
 - Instant cuts worked at crossfade 0.
 - An offline Web Audio render confirmed the fade curves and final gains.
+- A tag on a downloaded track survived a reload, and survived a session where that track was not loaded.
+- After a server restart, the booth showed the right phone count as phones joined and left. A scripted client also confirmed that repeat registration and a dropped connection count correctly.
 
 Not verified yet: real music on real speakers. Do the hidden-window crossfade check in [docs/WEEKEND_RUNBOOK.md](docs/WEEKEND_RUNBOOK.md) before the party.
 
@@ -80,16 +84,14 @@ Not verified yet: real music on real speakers. Do the hidden-window crossfade ch
 
 Found in the 2026-10-09 code review and not fixed yet, most important first:
 
-1. **Energy tags can be wiped.** `saveTrackPrefs` rebuilds saved tags from only the tracks loaded this session, so tags for any other track are deleted. Downloaded tracks never read their saved tags back.
-2. **Session code is never checked.** The code in the QR link is generated but not verified, so any device on the Wi-Fi can control the booth and trigger downloads.
-3. **Any socket can overwrite party state.** `display:state` is accepted without checking the sender's role, and Socket.IO allows any origin (`cors: { origin: true }`).
-4. **Open-audio boundary is not enforced on download.** The search query is not wrapped in parentheses, so words like `OR` can escape the collection filter. `/api/download` accepts any Internet Archive identifier.
-5. **Phone count drifts after reconnects.** Clients register once at page load and do not register again after Socket.IO reconnects.
-6. **Cue plays immediately.** It jumps to the song instead of queueing it next. The docs now describe this behavior; decide whether a real "play next" action is wanted.
-7. **Large libraries are slow.** Each imported file triggers a full queue re-render and a full playlist broadcast. The whole playlist is also resent every 700 ms.
-8. **Two booth tabs both play.** Every remote command reaches every open booth tab.
-9. **Remote sliders jump while dragging.** Incoming state resets the phone's slider values mid-drag.
-10. **Download leftovers.** A failed download leaves a `.download` temp file. Parallel downloads of the same file share one temp path.
+1. **Session code is never checked.** The code in the QR link is generated but not verified, so any device on the Wi-Fi can control the booth and trigger downloads.
+2. **Any socket can overwrite party state.** `display:state` is accepted without checking the sender's role, and Socket.IO allows any origin (`cors: { origin: true }`).
+3. **Open-audio boundary is not enforced on download.** The search query is not wrapped in parentheses, so words like `OR` can escape the collection filter. `/api/download` accepts any Internet Archive identifier.
+4. **Cue plays immediately.** It jumps to the song instead of queueing it next. The docs now describe this behavior; decide whether a real "play next" action is wanted.
+5. **Large libraries are slow.** Each imported file triggers a full queue re-render and a full playlist broadcast. The whole playlist is also resent every 700 ms.
+6. **Two booth tabs both play.** Every remote command reaches every open booth tab.
+7. **Remote sliders jump while dragging.** Incoming state resets the phone's slider values mid-drag.
+8. **Download leftovers.** A failed download leaves a `.download` temp file. Parallel downloads of the same file share one temp path.
 
 ## Important Boundary
 
@@ -195,7 +197,7 @@ Important limitation:
 
 ## Recommended Next Dev Task
 
-Before new features, fix Known Issues 2–4 (who can control the booth and what it can download), then issue 1.
+Before new features, fix Known Issues 1–3: who can control the booth and what it can download.
 
 Then build a PWA install mode:
 

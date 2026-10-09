@@ -108,7 +108,7 @@ Search quality depends on what the open audio collections contain.
 | 48–71  | Groove    |
 | 72–100 | Peak      |
 
-Each track gets an energy guess from its file name. Words like *remix*, *club*, or *house* suggest Peak (82). Words like *chill*, *acoustic*, or *intro* suggest Warmup (32). Everything else starts at 55. Use the Warm, Groove, and Peak buttons in the queue to correct a track.
+Each track gets an energy guess from its file name. Words like *remix*, *club*, or *house* suggest Peak (82). Words like *chill*, *acoustic*, or *intro* suggest Warmup (32). Everything else starts at 55. Use the Warm, Groove, and Peak buttons in the queue to correct a track. Your tags are remembered in this browser on the Mac, for both local files and downloads.
 
 ### Auto DJ
 

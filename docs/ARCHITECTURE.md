@@ -59,6 +59,10 @@ Downloaded search results are different: the server downloads them into `music-d
 8. Server broadcasts commands as `player:command`.
 9. Mac handles commands and rebroadcasts updated state.
 
+Clients register on every `connect` event, not only at page load. After a Wi-Fi drop or a server restart, Socket.IO reconnects with a new socket, and the server only knows its role once it registers again.
+
+The server works out the display and phone counts by counting live sockets by role each time someone registers or disconnects. It then sends them out as a `presence` event. Recounting instead of keeping running totals means reconnects and repeat registrations cannot push the counts out of sync.
+
 ## Audio Graph
 
 The Mac uses two audio elements:
@@ -118,6 +122,8 @@ Local browser storage keeps:
 - crossfade setting
 - Auto DJ setting
 - per-track energy tags
+
+Energy tags are keyed by track: file name, size, and modified time for local files, or the Internet Archive item and file name for downloads. A tag is saved only when you set one. It is merged into the stored tags, so tags for tracks you did not load this session are kept. Both local files and downloads read their saved tag when they are added to the queue.
 
 Play counts, votes, and play history live in memory and reset when the page reloads.
 
