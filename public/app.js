@@ -1,3 +1,5 @@
+import { findQueuedTrack, parseVoiceCommand } from "./voice.js";
+
 const params = new URLSearchParams(window.location.search);
 const isRemote = params.has("remote") || params.get("role") === "remote";
 const sessionCode = params.get("session") || "";
@@ -25,6 +27,7 @@ const els = {
   nextBtn: document.querySelector("#next-btn"),
   previousBtn: document.querySelector("#previous-btn"),
   hypeBtn: document.querySelector("#hype-btn"),
+  volumeSlider: document.querySelector("#volume-slider"),
   energySlider: document.querySelector("#energy-slider"),
   crossfadeSlider: document.querySelector("#crossfade-slider"),
   autoDjToggle: document.querySelector("#autodj-toggle"),
@@ -50,6 +53,7 @@ const els = {
   remoteElapsed: document.querySelector("#remote-elapsed"),
   remoteDuration: document.querySelector("#remote-duration"),
   remoteProgress: document.querySelector("#remote-progress"),
+  remoteVolume: document.querySelector("#remote-volume"),
   remoteEnergy: document.querySelector("#remote-energy"),
   remoteCrossfade: document.querySelector("#remote-crossfade"),
   remoteQueue: document.querySelector("#remote-queue"),
@@ -79,10 +83,21 @@ const searchSources = {
   },
 };
 
+const speechErrors = {
+  "not-allowed": "Microphone access is blocked. Allow the microphone for this page in the browser's site settings.",
+  "service-not-allowed": "Speech recognition is turned off. In Safari, turn on Dictation in System Settings > Keyboard.",
+  "no-speech": "Didn't hear anything. Press Talk and try again.",
+  "audio-capture": "No microphone found.",
+  network: "Speech recognition needs an internet connection.",
+  aborted: "Stopped listening.",
+};
+
 let audioContext;
 let analyser;
 let analyserData;
+let masterGain;
 let youtubeApi = null;
+let recognition = null;
 let isTransitioning = false;
 let pendingCue = null;
 let renderTick = 0;
@@ -100,6 +115,8 @@ const booth = {
   tracks: [],
   currentIndex: -1,
   playing: false,
+  volume: settings.volume ?? 100,
+  mutedVolume: 0,
   energy: settings.energy,
   crossfade: settings.crossfade,
   autoDj: settings.autoDj,
@@ -125,6 +142,7 @@ function boot() {
 
   bindSocket();
   bindSearchControls();
+  bindVoiceControls();
 
   if (isRemote) {
     bindRemoteControls();
@@ -220,25 +238,44 @@ function bindDisplayControls() {
   els.previousBtn.addEventListener("click", previousTrack);
   els.hypeBtn.addEventListener("click", hypeMoment);
 
-  els.energySlider.addEventListener("input", () => {
-    booth.energy = Number(els.energySlider.value);
-    saveSettings();
-    renderDisplay();
-    syncFromDisplay(true);
-  });
+  els.volumeSlider.addEventListener("input", () => setVolume(els.volumeSlider.value));
+  els.energySlider.addEventListener("input", () => setEnergy(els.energySlider.value));
+  els.crossfadeSlider.addEventListener("input", () => setCrossfade(els.crossfadeSlider.value));
+  els.autoDjToggle.addEventListener("change", () => setAutoDj(els.autoDjToggle.checked));
+}
 
-  els.crossfadeSlider.addEventListener("input", () => {
-    booth.crossfade = Number(els.crossfadeSlider.value);
-    saveSettings();
-    syncFromDisplay(true);
-  });
+// The booth's own sliders, phone commands, and voice commands all change settings through these.
+function setVolume(value) {
+  booth.volume = clamp(value, 0, 100);
+  els.volumeSlider.value = String(booth.volume);
+  if (masterGain) masterGain.gain.setTargetAtTime(booth.volume / 100, audioContext.currentTime, 0.05);
+  youtubeDeck.refreshVolume();
+  saveSettings();
+  syncFromDisplay(true);
+}
 
-  els.autoDjToggle.addEventListener("change", () => {
-    booth.autoDj = els.autoDjToggle.checked;
-    saveSettings();
-    renderDisplay();
-    syncFromDisplay(true);
-  });
+function setEnergy(value) {
+  booth.energy = clamp(value, 0, 100);
+  els.energySlider.value = String(booth.energy);
+  saveSettings();
+  renderDisplay();
+  syncFromDisplay(true);
+}
+
+function setCrossfade(value) {
+  booth.crossfade = clamp(value, 0, 12);
+  els.crossfadeSlider.value = String(booth.crossfade);
+  saveSettings();
+  renderDisplay();
+  syncFromDisplay(true);
+}
+
+function setAutoDj(on) {
+  booth.autoDj = Boolean(on);
+  els.autoDjToggle.checked = booth.autoDj;
+  saveSettings();
+  renderDisplay();
+  syncFromDisplay(true);
 }
 
 function bindSearchControls() {
@@ -304,6 +341,10 @@ function bindRemoteControls() {
     });
   });
 
+  els.remoteVolume.addEventListener("input", () => {
+    sendCommand({ type: "setVolume", value: Number(els.remoteVolume.value) });
+  });
+
   els.remoteEnergy.addEventListener("input", () => {
     sendCommand({ type: "setEnergy", value: Number(els.remoteEnergy.value) });
   });
@@ -349,6 +390,7 @@ function handleRemoteCommand(command) {
   if (command.type === "hype") hypeMoment();
 
   if (command.type === "addYouTube") addYouTubeTrack(command.video, Boolean(command.playNow));
+  if (command.type === "voice") runVoiceCommand(command.text);
 
   if (command.type === "jumpTo") {
     const index = booth.tracks.findIndex((track) => track.id === command.trackId);
@@ -365,19 +407,200 @@ function handleRemoteCommand(command) {
     }
   }
 
-  if (command.type === "setEnergy") {
-    booth.energy = clamp(command.value, 0, 100);
-    els.energySlider.value = String(booth.energy);
-    saveSettings();
-    renderDisplay();
-    syncFromDisplay(true);
+  if (command.type === "setVolume") setVolume(command.value);
+  if (command.type === "setEnergy") setEnergy(command.value);
+  if (command.type === "setCrossfade") setCrossfade(command.value);
+}
+
+function bindVoiceControls() {
+  document.querySelectorAll(".voice-control").forEach((section) => {
+    const form = section.querySelector(".voice-form");
+    const input = section.querySelector(".voice-input");
+    const talk = section.querySelector(".voice-button");
+
+    talk.hidden = !canListen();
+    talk.addEventListener("click", () => toggleListening(section));
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      submitVoiceText(section, text);
+    });
+  });
+
+  if (isRemote) return;
+
+  const boothVoice = els.displayView.querySelector(".voice-control");
+  if (!canListen()) {
+    boothVoice.querySelector(".voice-status").textContent = "This browser can't listen here. Type a command, or open the booth in Chrome or Safari.";
+    return;
   }
 
-  if (command.type === "setCrossfade") {
-    booth.crossfade = clamp(command.value, 0, 12);
-    els.crossfadeSlider.value = String(booth.crossfade);
-    saveSettings();
-    syncFromDisplay(true);
+  // V starts and stops listening on the booth, unless someone is typing.
+  window.addEventListener("keydown", (event) => {
+    if (event.key.toLowerCase() !== "v" || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (event.target.closest?.("input, textarea, select, [contenteditable]")) return;
+    toggleListening(boothVoice);
+  });
+}
+
+function speechRecognitionClass() {
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+// Browsers only allow the microphone on secure pages: the booth at localhost qualifies, a phone on
+// plain http does not, so phones fall back to their keyboard's dictation key.
+function canListen() {
+  return Boolean(speechRecognitionClass()) && window.isSecureContext;
+}
+
+function toggleListening(section) {
+  if (recognition) {
+    recognition.stop();
+    return;
+  }
+
+  const status = section.querySelector(".voice-status");
+  const talk = section.querySelector(".voice-button");
+  const Recognition = speechRecognitionClass();
+  const listener = new Recognition();
+  let handled = false;
+
+  // The command words are English, so recognize English whatever the system language is.
+  listener.lang = "en-US";
+  listener.interimResults = true;
+  listener.maxAlternatives = 3;
+
+  listener.onresult = (event) => {
+    const result = event.results[event.results.length - 1];
+    const heard = result[0].transcript;
+    status.textContent = `Hearing: “${heard}”`;
+    if (!result.isFinal || handled) return;
+
+    handled = true;
+    // Recognizers often rank a near miss first, so use the first alternative that is a command.
+    const alternatives = Array.from(result, (alternative) => alternative.transcript);
+    submitVoiceText(section, alternatives.find((text) => parseVoiceCommand(text)) || heard);
+  };
+
+  listener.onerror = (event) => {
+    status.textContent = speechErrors[event.error] || `Voice error: ${event.error}`;
+  };
+
+  listener.onend = () => {
+    recognition = null;
+    talk.classList.remove("is-listening");
+    talk.setAttribute("aria-pressed", "false");
+    talk.textContent = "Talk";
+    if (!handled && /^(Listening|Hearing)/.test(status.textContent)) {
+      status.textContent = "Didn't catch a command. Press Talk and try again.";
+    }
+  };
+
+  try {
+    listener.start();
+  } catch (error) {
+    status.textContent = `Couldn't start listening: ${error.message}`;
+    return;
+  }
+
+  recognition = listener;
+  talk.classList.add("is-listening");
+  talk.setAttribute("aria-pressed", "true");
+  talk.textContent = "Stop";
+  status.textContent = "Listening… say a command.";
+}
+
+async function submitVoiceText(section, text) {
+  const status = section.querySelector(".voice-status");
+
+  if (isRemote) {
+    // The booth runs the command and reports back through its state message.
+    sendCommand({ type: "voice", text });
+    status.textContent = `Sent “${text}” to the booth.`;
+    return;
+  }
+
+  const result = await runVoiceCommand(text);
+  status.textContent = `“${text}” → ${result}`;
+}
+
+async function runVoiceCommand(text) {
+  const spoken = String(text || "").slice(0, 200);
+  const command = parseVoiceCommand(spoken);
+  let result;
+
+  if (!command) {
+    result = `didn't catch a command in “${spoken}”`;
+  } else if (command.action === "next") {
+    nextTrack(true);
+    result = "next song";
+  } else if (command.action === "previous") {
+    previousTrack();
+    result = "previous song";
+  } else if (command.action === "pause") {
+    if (booth.playing) pauseAll();
+    result = "paused";
+  } else if (command.action === "play") {
+    if (!booth.playing) await togglePlay();
+    result = booth.playing ? "playing" : booth.message;
+  } else if (command.action === "volume") {
+    setVolume(command.value ?? booth.volume + command.delta);
+    result = `volume ${booth.volume}`;
+  } else if (command.action === "mute") {
+    if (booth.volume > 0) booth.mutedVolume = booth.volume;
+    setVolume(0);
+    result = "muted";
+  } else if (command.action === "unmute") {
+    setVolume(booth.mutedVolume || 80);
+    result = `volume ${booth.volume}`;
+  } else if (command.action === "energy") {
+    setEnergy(command.value ?? booth.energy + command.delta);
+    result = `energy ${booth.energy} (${energyMode(booth.energy)})`;
+  } else if (command.action === "hype") {
+    hypeMoment();
+    result = "hype!";
+  } else if (command.action === "crossfade") {
+    setCrossfade(command.value);
+    result = `crossfade ${booth.crossfade}s`;
+  } else if (command.action === "autoDj") {
+    setAutoDj(command.value);
+    result = booth.autoDj ? "Auto DJ on" : "Auto DJ off";
+  } else {
+    result = await requestSong(command.query, command.action === "playSong");
+  }
+
+  booth.message = `Voice: ${result}`;
+  renderDisplay();
+  syncFromDisplay(true);
+  return result;
+}
+
+// A song request plays from the queue when it's there, and otherwise from YouTube's top result.
+async function requestSong(query, playNow) {
+  const playable = booth.tracks.map((track) => (track.unplayable ? {} : track));
+  const index = findQueuedTrack(query, playable);
+
+  if (index >= 0) {
+    const track = booth.tracks[index];
+    if (!playNow) return `${track.title} is already in the queue`;
+    cueTrack(index, true);
+    return `playing ${track.title}`;
+  }
+
+  try {
+    const response = await apiFetch(`/api/youtube/search?q=${encodeURIComponent(query)}`);
+    const payload = await response.json();
+    if (!response.ok) return `“${query}” isn't in the queue. ${payload.error || "YouTube search failed."}`;
+
+    const video = payload.results[0];
+    if (!video) return `couldn't find “${query}” in the queue or on YouTube`;
+
+    addYouTubeTrack(video, playNow);
+    return playNow ? `playing ${video.title} from YouTube` : `added ${video.title} from YouTube`;
+  } catch {
+    return `couldn't search YouTube for “${query}”. Check the internet connection.`;
   }
 }
 
@@ -569,7 +792,11 @@ async function setupAudio() {
     deck.gain.connect(analyser);
   });
 
-  analyser.connect(audioContext.destination);
+  // Master volume sits after the analyser, so the visualizer keeps moving at low volume.
+  masterGain = audioContext.createGain();
+  masterGain.gain.value = booth.volume / 100;
+  analyser.connect(masterGain);
+  masterGain.connect(audioContext.destination);
   await audioContext.resume();
 }
 
@@ -833,6 +1060,7 @@ function createYouTubeDeck() {
   let track = null;
   let lastError = null;
   let needsStart = false;
+  let level = 1;
   let fadeTimer = 0;
   let progressTimer = 0;
   let startWaiter = null;
@@ -919,8 +1147,10 @@ function createYouTubeDeck() {
     els.stage.classList.toggle("has-video", visible);
   }
 
-  function setVolume(value) {
-    player?.setVolume(Math.round(clamp(value, 0, 1) * 100));
+  // The deck's own level (fades) times the booth's master volume.
+  function applyLevel(value) {
+    level = clamp(value, 0, 1);
+    player?.setVolume(Math.round(level * booth.volume));
   }
 
   function stopTimers() {
@@ -1001,16 +1231,19 @@ function createYouTubeDeck() {
     },
     setLevel(value) {
       window.clearInterval(fadeTimer);
-      setVolume(value);
+      applyLevel(value);
     },
     fade(curve, seconds) {
       window.clearInterval(fadeTimer);
       const started = performance.now();
       fadeTimer = window.setInterval(() => {
         const progress = Math.min(1, (performance.now() - started) / (seconds * 1000));
-        setVolume(curve[Math.round(progress * (curve.length - 1))]);
+        applyLevel(curve[Math.round(progress * (curve.length - 1))]);
         if (progress >= 1) window.clearInterval(fadeTimer);
       }, 50);
+    },
+    refreshVolume() {
+      applyLevel(level);
     },
   };
 
@@ -1148,6 +1381,7 @@ function updatePlaybackProgress() {
 }
 
 function applySettingsToInputs() {
+  els.volumeSlider.value = String(booth.volume);
   els.energySlider.value = String(booth.energy);
   els.crossfadeSlider.value = String(booth.crossfade);
   els.autoDjToggle.checked = booth.autoDj;
@@ -1155,6 +1389,7 @@ function applySettingsToInputs() {
 
 function saveSettings() {
   writeJson(settingsKey, {
+    volume: booth.volume,
     energy: booth.energy,
     crossfade: booth.crossfade,
     autoDj: booth.autoDj,
@@ -1409,9 +1644,20 @@ function renderRemote() {
   els.remoteElapsed.textContent = formatTime(remoteState.currentTime || 0);
   els.remoteDuration.textContent = duration ? formatTime(duration) : "0:00";
   els.remoteProgress.style.width = `${progress}%`;
+  els.remoteVolume.value = String(remoteState.volume ?? 100);
   els.remoteEnergy.value = String(remoteState.energy ?? 52);
   els.remoteCrossfade.value = String(remoteState.crossfade ?? 5);
   els.remoteQueueCount.textContent = `${playlist.length} tracks`;
+
+  // Show the booth's answer to a voice command under the phone's voice box. The first state a
+  // phone receives only sets the baseline, so it doesn't show an old answer from before it joined.
+  const voiceStatus = els.remoteView.querySelector(".voice-status");
+  if (voiceStatus.dataset.shown === undefined) {
+    voiceStatus.dataset.shown = remoteState.message || "";
+  } else if (remoteState.message?.startsWith("Voice: ") && voiceStatus.dataset.shown !== remoteState.message) {
+    voiceStatus.dataset.shown = remoteState.message;
+    voiceStatus.textContent = `Booth: ${remoteState.message.slice("Voice: ".length)}`;
+  }
 
   const playButton = document.querySelector('[data-command="playPause"]');
   if (playButton) playButton.textContent = remoteState.playing ? "Pause" : "Play";
@@ -1477,6 +1723,7 @@ function syncFromDisplay(force = false) {
     autoDj: booth.autoDj,
     visualStyle: booth.visualStyle,
     hypeUntil: booth.hypeUntil,
+    volume: booth.volume,
     message: booth.message,
   });
 }

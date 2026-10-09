@@ -576,6 +576,49 @@ input[type="range"] {
   gap: 0.8rem;
 }
 
+.voice-control {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.voice-form {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.voice-form .voice-input {
+  flex: 1;
+}
+
+.voice-button {
+  min-height: 3.25rem;
+  padding: 0 1rem;
+  border-radius: var(--radius);
+  background: linear-gradient(135deg, var(--teal), #87ffe2);
+  color: #06100d;
+  font-size: 0.86rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.voice-button.is-listening {
+  background: linear-gradient(135deg, var(--pink), #ff7a3d);
+  color: #fff;
+  animation: voice-pulse 1s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  50% {
+    box-shadow: 0 0 0 0.45rem rgba(255, 62, 127, 0.25);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-button.is-listening {
+    animation: none;
+  }
+}
+
 .source-tabs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -104,6 +104,10 @@
 
             <div class="card sliders control-card">
               <label>
+                <span>Master volume</span>
+                <input id="volume-slider" type="range" min="0" max="100" value="100">
+              </label>
+              <label>
                 <span>Party energy</span>
                 <input id="energy-slider" type="range" min="0" max="100" value="52">
               </label>
@@ -115,6 +119,21 @@
                 <span>Auto DJ flow</span>
                 <input id="autodj-toggle" type="checkbox" checked>
               </label>
+            </div>
+
+            <div class="card voice-control">
+              <div class="card-head">
+                <div>
+                  <p class="eyebrow">Voice</p>
+                  <h2>Talk to the booth</h2>
+                </div>
+              </div>
+              <form class="voice-form">
+                <button class="voice-button" type="button" aria-pressed="false" hidden>Talk</button>
+                <input class="search-input voice-input" type="text" placeholder="Or type: next, louder, play a song" autocomplete="off" enterkeyhint="go" aria-label="Voice command">
+                <button class="search-button" type="submit">Go</button>
+              </form>
+              <p class="search-status voice-status">Press Talk (or the V key) and say “next”, “louder”, or “play” and a song.</p>
             </div>
 
             <div class="card import-card">
@@ -186,6 +205,21 @@
             <button data-command="hype" class="remote-button hot">Hype</button>
           </div>
 
+          <div class="remote-card voice-control">
+            <div class="section-title">
+              <div>
+                <p class="eyebrow">Voice</p>
+                <h2>Say a command</h2>
+              </div>
+            </div>
+            <form class="voice-form">
+              <button class="voice-button" type="button" aria-pressed="false" hidden>Talk</button>
+              <input class="search-input voice-input" type="text" placeholder="Tap, then the keyboard mic" autocomplete="off" enterkeyhint="go" aria-label="Voice command">
+              <button class="search-button" type="submit">Go</button>
+            </form>
+            <p class="search-status voice-status">Tap the box, then the microphone on your keyboard, and say “next”, “louder”, or “play” and a song.</p>
+          </div>
+
           <div class="remote-card music-search">
             <div class="section-title">
               <div>
@@ -206,6 +240,10 @@
           </div>
 
           <div class="remote-card">
+            <label>
+              <span>Volume</span>
+              <input id="remote-volume" type="range" min="0" max="100" value="100">
+            </label>
             <label>
               <span>Energy</span>
               <input id="remote-energy" type="range" min="0" max="100" value="52">
