@@ -11,7 +11,17 @@ import { Server } from "socket.io";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+try {
+  // Optional local settings such as YOUTUBE_API_KEY. The file is gitignored.
+  process.loadEnvFile(path.join(__dirname, ".env"));
+} catch {
+  // No .env file (or a Node.js without loadEnvFile): use the real environment as is.
+}
+
 const port = Number(process.env.PORT || 4242);
+const youtubeApiKey = process.env.YOUTUBE_API_KEY || "";
+const youtubeApiBase = "https://www.googleapis.com/youtube/v3";
 const maxDownloadBytes = 60 * 1024 * 1024;
 const openAudioFilter = [
   "mediatype:audio",
@@ -151,6 +161,41 @@ async function isOpenAudioItem(identifier) {
 
   const data = await response.json();
   return Number(data.response?.numFound || 0) > 0;
+}
+
+function isoDurationSeconds(value) {
+  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(String(value || ""));
+  if (!match) return 0;
+  const [, days, hours, minutes, seconds] = match.map((part) => Number(part || 0));
+  return days * 86400 + hours * 3600 + minutes * 60 + seconds;
+}
+
+function youtubeError(status, message) {
+  return Object.assign(new Error(message), { status });
+}
+
+async function youtubeGet(endpoint, params) {
+  const url = new URL(`${youtubeApiBase}/${endpoint}`);
+  Object.entries({ ...params, key: youtubeApiKey }).forEach(([name, value]) => {
+    url.searchParams.set(name, value);
+  });
+
+  const response = await fetch(url, { signal: AbortSignal.timeout(12000) });
+  const data = await response.json().catch(() => ({}));
+  if (response.ok) return data;
+
+  const reason = data.error?.errors?.[0]?.reason || "";
+  const message = data.error?.message || "";
+  if (/quotaExceeded|dailyLimitExceeded/.test(reason)) {
+    throw youtubeError(429, "YouTube's daily search limit for this API key is used up. It resets at midnight Pacific time.");
+  }
+  if (reason === "keyInvalid" || /API key not valid/i.test(message)) {
+    throw youtubeError(503, "The YouTube API key isn't valid. Check YOUTUBE_API_KEY in the .env file.");
+  }
+  if (reason === "accessNotConfigured" || /has not been used|is disabled/i.test(message)) {
+    throw youtubeError(503, "YouTube Data API v3 isn't enabled for this API key's Google Cloud project.");
+  }
+  throw youtubeError(502, `YouTube search failed (${response.status}).`);
 }
 
 function cleanSearchTerm(value) {
@@ -325,6 +370,62 @@ app.get("/api/search", requirePairing, async (req, res) => {
   }
 });
 
+// YouTube is search and play only: videos stream through YouTube's own player on the booth,
+// and nothing from YouTube is ever downloaded.
+app.get("/api/youtube/search", requirePairing, async (req, res) => {
+  if (!youtubeApiKey) {
+    res.status(503).json({ error: "YouTube search isn't set up yet. Add YOUTUBE_API_KEY to the .env file and restart the server." });
+    return;
+  }
+
+  const query = cleanSearchTerm(req.query.q);
+
+  if (query.length < 2) {
+    res.status(400).json({ error: "Search needs at least two characters." });
+    return;
+  }
+
+  try {
+    const search = await youtubeGet("search", {
+      part: "snippet",
+      type: "video",
+      videoEmbeddable: "true",
+      maxResults: "10",
+      q: query,
+    });
+    const ids = (search.items || []).map((item) => item.id?.videoId).filter(Boolean);
+
+    if (!ids.length) {
+      res.json({ query, results: [] });
+      return;
+    }
+
+    // search.list has no durations, which Auto DJ needs; videos.list adds them for 1 quota unit.
+    const videos = await youtubeGet("videos", { part: "snippet,contentDetails", id: ids.join(",") });
+    const byId = new Map((videos.items || []).map((item) => [item.id, item]));
+    const results = ids
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .map((item) => ({
+        videoId: item.id,
+        title: item.snippet?.title || "YouTube video",
+        channel: item.snippet?.channelTitle || "YouTube",
+        duration: isoDurationSeconds(item.contentDetails?.duration),
+        thumbnail: item.snippet?.thumbnails?.medium?.url || item.snippet?.thumbnails?.default?.url || "",
+        url: `https://www.youtube.com/watch?v=${item.id}`,
+      }))
+      // Live streams report no length, so Auto DJ could never plan the next song.
+      .filter((video) => video.duration > 0);
+
+    res.json({ query, results });
+  } catch (error) {
+    res.status(error.status || 502).json({
+      error: error.status ? error.message : "YouTube search is unavailable right now. Check the internet connection and try again.",
+      detail: error.message,
+    });
+  }
+});
+
 app.post("/api/download", requirePairing, async (req, res) => {
   const identifier = cleanIdentifier(req.body?.identifier);
 
@@ -483,6 +584,7 @@ server.listen(port, "0.0.0.0", () => {
   console.log("Party DJ Booth is running.");
   console.log(`Mac player:  http://localhost:${port}`);
   console.log(`Phone remote: http://${lanAddress}:${port}/?remote=1&session=${sessionCode}`);
+  console.log(`YouTube search: ${youtubeApiKey ? "on" : "off (add YOUTUBE_API_KEY to .env)"}`);
   console.log("");
   console.log("Keep this server running while the party is active.");
 });

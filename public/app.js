@@ -55,20 +55,36 @@ const els = {
   remoteQueue: document.querySelector("#remote-queue"),
   remoteQueueCount: document.querySelector("#remote-queue-count"),
   searchSections: document.querySelectorAll(".music-search"),
+  stage: document.querySelector(".stage"),
+  youtubeStage: document.querySelector("#youtube-stage"),
 };
 
 const settingsKey = "party-dj-booth-settings";
 const trackPrefsKey = "party-dj-booth-track-prefs";
-const decks = [
-  { el: els.deckA, gain: null, source: null },
-  { el: els.deckB, gain: null, source: null },
-];
+const youtubeStates = { ended: 0, playing: 1, buffering: 3 };
+const searchSources = {
+  archive: {
+    endpoint: "/api/search",
+    hint: "Open audio collections, saved locally.",
+    searching: "Searching open audio collections...",
+    found: (count) => `${count} legal download results found.`,
+    none: "No open audio results found. Try another song, artist, or vibe.",
+  },
+  youtube: {
+    endpoint: "/api/youtube/search",
+    hint: "Plays through YouTube's player on the booth. Nothing is downloaded.",
+    searching: "Searching YouTube...",
+    found: (count) => `${count} YouTube videos found. They play on the booth; nothing is downloaded.`,
+    none: "No YouTube videos found. Try another song or artist.",
+  },
+};
 
 let audioContext;
 let analyser;
 let analyserData;
-let activeDeck = 0;
+let youtubeApi = null;
 let isTransitioning = false;
+let pendingCue = null;
 let renderTick = 0;
 let lastSync = 0;
 let remoteState = {};
@@ -92,6 +108,13 @@ const booth = {
   message: "Waiting for music on the Mac",
   history: [],
 };
+
+// Every deck has the same shape, so playback code doesn't care whether a track is an audio file
+// or a YouTube video. Two audio decks let local tracks overlap during a crossfade.
+const audioDecks = [createAudioDeck(els.deckA, "A"), createAudioDeck(els.deckB, "B")];
+const youtubeDeck = createYouTubeDeck();
+const allDecks = [...audioDecks, youtubeDeck];
+let activeDeck = audioDecks[0];
 
 function boot() {
   els.shell.dataset.role = isRemote ? "remote" : "display";
@@ -216,11 +239,6 @@ function bindDisplayControls() {
     renderDisplay();
     syncFromDisplay(true);
   });
-
-  decks.forEach((deck) => {
-    deck.el.addEventListener("timeupdate", updatePlaybackProgress);
-    deck.el.addEventListener("ended", () => nextTrack(false));
-  });
 }
 
 function bindSearchControls() {
@@ -229,31 +247,51 @@ function bindSearchControls() {
     const input = section.querySelector(".search-input");
     const status = section.querySelector(".search-status");
     const results = section.querySelector(".search-results");
+    const tabs = section.querySelectorAll(".source-tab");
+    section.dataset.source = "archive";
+
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => {
+        section.dataset.source = tab.dataset.source;
+        tabs.forEach((other) => {
+          other.classList.toggle("is-selected", other === tab);
+          other.setAttribute("aria-pressed", String(other === tab));
+        });
+        status.textContent = searchSources[tab.dataset.source].hint;
+        results.replaceChildren();
+      });
+    });
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const query = input.value.trim();
+      const sourceName = section.dataset.source;
+      const source = searchSources[sourceName];
 
       if (query.length < 2) {
         status.textContent = "Type at least two characters.";
         return;
       }
 
-      status.textContent = "Searching open audio collections...";
+      status.textContent = source.searching;
       results.replaceChildren();
 
       try {
-        const response = await apiFetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const response = await apiFetch(`${source.endpoint}?q=${encodeURIComponent(query)}`);
         const payload = await response.json();
 
         if (!response.ok) throw new Error(payload.error || "Search failed.");
+        // The user switched source while this search was running.
+        if (section.dataset.source !== sourceName) return;
 
-        status.textContent = payload.results.length
-          ? `${payload.results.length} legal download results found.`
-          : "No open audio results found. Try another song, artist, or vibe.";
-        renderSearchResults(section, payload.results);
+        status.textContent = payload.results.length ? source.found(payload.results.length) : source.none;
+        if (sourceName === "youtube") {
+          renderYouTubeResults(section, payload.results);
+        } else {
+          renderSearchResults(section, payload.results);
+        }
       } catch (error) {
-        status.textContent = error.message;
+        if (section.dataset.source === sourceName) status.textContent = error.message;
       }
     });
   });
@@ -310,9 +348,11 @@ function handleRemoteCommand(command) {
   if (command.type === "previous") previousTrack();
   if (command.type === "hype") hypeMoment();
 
+  if (command.type === "addYouTube") addYouTubeTrack(command.video, Boolean(command.playNow));
+
   if (command.type === "jumpTo") {
     const index = booth.tracks.findIndex((track) => track.id === command.trackId);
-    if (index >= 0) loadTrack(index, booth.playing, true);
+    if (index >= 0) cueTrack(index, booth.playing);
   }
 
   if (command.type === "vote") {
@@ -359,6 +399,7 @@ function addFiles(fileList) {
     const track = {
       id: safeId(),
       key,
+      kind: "audio",
       title: parsed.title,
       artist: parsed.artist,
       fileName: file.name,
@@ -396,6 +437,7 @@ function addDownloadedTrack(downloadedTrack, announce) {
   const track = {
     id: safeId(),
     key,
+    kind: "audio",
     title,
     artist,
     fileName: downloadedTrack.fileName || title,
@@ -419,6 +461,50 @@ function addDownloadedTrack(downloadedTrack, announce) {
   }
 
   if (announce) booth.message = `Downloaded ${title}`;
+  renderDisplay();
+  syncFromDisplay(true);
+}
+
+function addYouTubeTrack(video, playNow) {
+  // Phones send videos over the socket, so check the shape before trusting it.
+  const videoId = String(video?.videoId || "");
+  if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) return;
+
+  const key = `youtube:${videoId}`;
+  let index = booth.tracks.findIndex((track) => track.key === key);
+
+  if (index === -1) {
+    const title = String(video.title || "YouTube video").slice(0, 200);
+    const saved = trackPrefs[key] || {};
+    booth.tracks.push({
+      id: safeId(),
+      key,
+      kind: "youtube",
+      videoId,
+      title,
+      artist: String(video.channel || "YouTube").slice(0, 120),
+      fileName: title,
+      size: 0,
+      duration: clamp(video.duration, 0, 24 * 3600),
+      url: "",
+      energy: saved.energy ?? guessEnergy(title),
+      votes: 0,
+      plays: 0,
+      source: "YouTube",
+      sourceUrl: `https://www.youtube.com/watch?v=${videoId}`,
+      addedAt: Date.now(),
+    });
+    index = booth.tracks.length - 1;
+  }
+
+  booth.message = `Queued ${booth.tracks[index].title} from YouTube`;
+
+  if (playNow) {
+    cueTrack(index, true);
+  } else if (booth.currentIndex === -1) {
+    loadTrack(index, false, false);
+  }
+
   renderDisplay();
   syncFromDisplay(true);
 }
@@ -475,10 +561,10 @@ async function setupAudio() {
   analyser.smoothingTimeConstant = 0.78;
   analyserData = new Uint8Array(analyser.frequencyBinCount);
 
-  decks.forEach((deck, index) => {
+  audioDecks.forEach((deck) => {
     deck.source = audioContext.createMediaElementSource(deck.el);
     deck.gain = audioContext.createGain();
-    deck.gain.gain.value = index === activeDeck ? 1 : 0;
+    deck.gain.gain.value = deck === activeDeck ? 1 : 0;
     deck.source.connect(deck.gain);
     deck.gain.connect(analyser);
   });
@@ -511,21 +597,20 @@ async function togglePlay() {
 async function playActive() {
   try {
     await setupAudio();
-    const deck = decks[activeDeck];
-    if (!deck.el.src && booth.currentIndex >= 0) {
-      deck.el.src = booth.tracks[booth.currentIndex].url;
+    if (!activeDeck.loaded && booth.currentIndex >= 0) {
+      await activeDeck.load(booth.tracks[booth.currentIndex]);
     }
-    await deck.el.play();
+    await activeDeck.play();
     booth.playing = true;
     booth.message = "Booth is playing";
-  } catch {
+  } catch (error) {
     booth.playing = false;
-    booth.message = "Press Play on the Mac once to unlock audio";
+    booth.message = error?.boothMessage || "Press Play on the Mac once to unlock audio";
   }
 }
 
 function pauseAll() {
-  decks.forEach((deck) => deck.el.pause());
+  allDecks.forEach((deck) => deck.pause());
   booth.playing = false;
   booth.message = "Paused";
 }
@@ -533,23 +618,32 @@ function pauseAll() {
 async function loadTrack(index, shouldPlay, useFade) {
   if (!booth.tracks[index] || isTransitioning) return;
 
-  const currentDeck = decks[activeDeck];
-  const nextDeckIndex = 1 - activeDeck;
-  const nextDeck = decks[nextDeckIndex];
   const track = booth.tracks[index];
-  const canFade = useFade && shouldPlay && booth.playing && booth.crossfade > 0 && currentDeck.el.src;
+  const currentDeck = activeDeck;
+  const nextDeck = deckFor(track);
+  const canFade = useFade && shouldPlay && booth.playing && booth.crossfade > 0 && currentDeck.loaded;
+  const previousIndex = booth.currentIndex;
 
   booth.currentIndex = index;
-  rememberPlay(track);
+  const remembered = rememberPlay(track);
   booth.message = `Loaded ${track.title}`;
 
   if (!canFade) {
-    currentDeck.el.pause();
-    currentDeck.el.src = track.url;
-    currentDeck.el.currentTime = 0;
-    setDeckGain(currentDeck, 1);
-    setDeckGain(nextDeck, 0);
-    if (shouldPlay) await playActive();
+    // Reuse the current deck when it plays this kind of track; otherwise switch decks.
+    const deck = currentDeck.kind === track.kind ? currentDeck : nextDeck;
+    allDecks.filter((other) => other !== deck && other.loaded).forEach((other) => other.stop());
+    activeDeck = deck;
+
+    try {
+      await deck.load(track);
+      deck.setLevel(1);
+      if (shouldPlay) await playActive();
+      else deck.preview?.();
+    } catch (error) {
+      booth.playing = false;
+      booth.message = error?.boothMessage || `Could not load ${track.title}`;
+    }
+
     updatePlaybackProgress();
     renderDisplay();
     syncFromDisplay(true);
@@ -558,32 +652,75 @@ async function loadTrack(index, shouldPlay, useFade) {
 
   await setupAudio();
   isTransitioning = true;
-  nextDeck.el.pause();
-  nextDeck.el.src = track.url;
-  nextDeck.el.currentTime = 0;
-  setDeckGain(nextDeck, 0);
+  let failed = false;
 
   try {
-    await nextDeck.el.play();
-    await fadeDecks(currentDeck, nextDeck, booth.crossfade);
-    currentDeck.el.pause();
-    currentDeck.el.removeAttribute("src");
-    currentDeck.el.load();
-    activeDeck = nextDeckIndex;
+    if (nextDeck === currentDeck) {
+      // One YouTube player can't overlap two videos, so fade out, switch, and fade back in.
+      await dipDeck(currentDeck, track, booth.crossfade);
+    } else {
+      await nextDeck.load(track);
+      nextDeck.setLevel(0);
+      await nextDeck.play();
+      await fadeDecks(currentDeck, nextDeck, booth.crossfade);
+      currentDeck.stop();
+      activeDeck = nextDeck;
+    }
     booth.playing = true;
     booth.message = `Now playing ${track.title}`;
-  } catch {
-    booth.message = "Could not crossfade this track";
+  } catch (error) {
+    failed = true;
+    booth.message = error?.boothMessage || "Could not crossfade this track";
+
+    if (nextDeck !== activeDeck) {
+      // The old deck is still playing its track: drop the failed deck (a dead YouTube video
+      // would stay on screen) and point the booth and Prev back at what is actually playing.
+      // The failed track keeps its play count, so Auto DJ tries other songs before retrying it.
+      nextDeck.stop();
+      if (remembered) booth.history.pop();
+      booth.currentIndex = previousIndex;
+    }
   } finally {
     isTransitioning = false;
     updatePlaybackProgress();
     renderDisplay();
     syncFromDisplay(true);
   }
+
+  if (pendingCue) {
+    const { index: cuedIndex, shouldPlay: cuedPlay } = pendingCue;
+    pendingCue = null;
+    loadTrack(cuedIndex, cuedPlay, true);
+    return;
+  }
+
+  // Keep the music going: skip a video YouTube refused, and move on after a failed
+  // YouTube-to-YouTube switch, which leaves nothing playing.
+  if (failed && booth.playing && (track.unplayable || nextDeck === currentDeck)) {
+    nextTrack(activeDeck !== nextDeck);
+  }
 }
 
-function fadeDecks(fromDeck, toDeck, seconds) {
-  const duration = Math.max(0.2, seconds);
+// Cue and Play now are what someone asked for, so a running crossfade delays them instead of
+// dropping them. Automatic transitions still just skip while a crossfade runs.
+function cueTrack(index, shouldPlay) {
+  if (isTransitioning) {
+    pendingCue = { index, shouldPlay };
+    booth.message = `Up next: ${booth.tracks[index]?.title}`;
+    renderDisplay();
+    syncFromDisplay(true);
+    return;
+  }
+  loadTrack(index, shouldPlay, true);
+}
+
+function deckFor(track) {
+  if (track.kind === "youtube") return youtubeDeck;
+  // Use the audio deck that isn't playing, so a crossfade can overlap the two.
+  return audioDecks.find((deck) => deck !== activeDeck);
+}
+
+function fadeCurves() {
   const steps = 64;
   const fadeIn = new Float32Array(steps);
   const fadeOut = new Float32Array(steps);
@@ -595,47 +732,345 @@ function fadeDecks(fromDeck, toDeck, seconds) {
     fadeOut[i] = 1 - shaped;
   }
 
-  // Run the fade on the audio clock. requestAnimationFrame stops when the tab is hidden
-  // or the screen sleeps, which used to freeze the fade and lock out every later transition.
-  const start = audioContext.currentTime;
-  fromDeck.gain.gain.cancelScheduledValues(0);
-  toDeck.gain.gain.cancelScheduledValues(0);
-  fromDeck.gain.gain.setValueCurveAtTime(fadeOut, start, duration);
-  toDeck.gain.gain.setValueCurveAtTime(fadeIn, start, duration);
+  return { fadeIn, fadeOut };
+}
 
-  return new Promise((resolve) => {
-    window.setTimeout(() => {
-      setDeckGain(fromDeck, 0);
-      setDeckGain(toDeck, 1);
-      resolve();
-    }, duration * 1000);
+function fadeDecks(fromDeck, toDeck, seconds) {
+  const duration = Math.max(0.2, seconds);
+  const { fadeIn, fadeOut } = fadeCurves();
+
+  // Audio decks fade on the audio clock and the YouTube deck on a timer, never on
+  // requestAnimationFrame: it stops when the tab is hidden or the screen sleeps, which used to
+  // freeze the fade and lock out every later transition.
+  fromDeck.fade(fadeOut, duration);
+  toDeck.fade(fadeIn, duration);
+
+  return wait(duration).then(() => {
+    fromDeck.setLevel(0);
+    toDeck.setLevel(1);
   });
 }
 
-function setDeckGain(deck, value) {
-  if (!deck.gain) return;
-  // Clear leftover fade automation first: setting a value inside a curve's time range throws.
-  deck.gain.gain.cancelScheduledValues(0);
-  deck.gain.gain.value = value;
+async function dipDeck(deck, track, seconds) {
+  const half = Math.max(0.2, seconds / 2);
+  const { fadeIn, fadeOut } = fadeCurves();
+
+  deck.fade(fadeOut, half);
+  await wait(half);
+  await deck.load(track);
+  deck.setLevel(0);
+  await deck.play();
+  deck.fade(fadeIn, half);
+  await wait(half);
+  deck.setLevel(1);
+}
+
+function wait(seconds) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, seconds * 1000);
+  });
+}
+
+function createAudioDeck(el, label) {
+  const deck = {
+    kind: "audio",
+    label,
+    el,
+    gain: null,
+    source: null,
+    get loaded() {
+      return Boolean(el.src);
+    },
+    get currentTime() {
+      return el.currentTime || 0;
+    },
+    set currentTime(value) {
+      el.currentTime = value;
+    },
+    get duration() {
+      return Number.isFinite(el.duration) ? el.duration : 0;
+    },
+    async load(track) {
+      el.pause();
+      el.src = track.url;
+      el.currentTime = 0;
+    },
+    play() {
+      return el.play();
+    },
+    pause() {
+      el.pause();
+    },
+    stop() {
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
+    },
+    setLevel(value) {
+      if (!deck.gain) return;
+      // Clear leftover fade automation first: setting a value inside a curve's time range throws.
+      deck.gain.gain.cancelScheduledValues(0);
+      deck.gain.gain.value = value;
+    },
+    fade(curve, seconds) {
+      if (!deck.gain) return;
+      deck.gain.gain.cancelScheduledValues(0);
+      deck.gain.gain.setValueCurveAtTime(curve, audioContext.currentTime, seconds);
+    },
+  };
+
+  el.addEventListener("timeupdate", updatePlaybackProgress);
+  el.addEventListener("ended", () => {
+    if (deck === activeDeck) nextTrack(false);
+  });
+
+  return deck;
+}
+
+function createYouTubeDeck() {
+  let player = null;
+  let playerReady = null;
+  let track = null;
+  let lastError = null;
+  let needsStart = false;
+  let fadeTimer = 0;
+  let progressTimer = 0;
+  let startWaiter = null;
+
+  function ensurePlayer() {
+    if (!playerReady) {
+      let created = null;
+      const ready = loadYouTubeApi().then((YT) => new Promise((resolve) => {
+        created = new YT.Player("youtube-player", {
+          width: "100%",
+          height: "100%",
+          playerVars: { playsinline: 1, rel: 0, origin: window.location.origin },
+          events: {
+            onReady: () => resolve(created),
+            onStateChange: handleState,
+            onError: handleError,
+          },
+        });
+      }));
+      // A player that never gets ready must not hold up the booth mid-transition.
+      playerReady = withTimeout(ready, 20, "Couldn't start the YouTube player. Check the internet connection.");
+      playerReady.then((value) => {
+        player = value;
+      }, () => {
+        // Start clean next time instead of reusing a half-built player.
+        created?.destroy();
+        if (!document.querySelector("#youtube-player")) {
+          const host = document.createElement("div");
+          host.id = "youtube-player";
+          els.youtubeStage.append(host);
+        }
+        playerReady = null;
+      });
+    }
+    return playerReady;
+  }
+
+  function settleStart(error) {
+    if (!startWaiter) return;
+    const waiter = startWaiter;
+    startWaiter = null;
+    window.clearTimeout(waiter.timer);
+    if (error) waiter.reject(error);
+    else waiter.resolve();
+  }
+
+  function handleState(event) {
+    if (event.data === youtubeStates.playing) {
+      needsStart = false;
+      settleStart(null);
+    }
+    if (event.data === youtubeStates.ended && deck === activeDeck) nextTrack(false);
+  }
+
+  function handleError(event) {
+    const reasons = {
+      2: "the video link is invalid",
+      5: "the video can't play in this browser",
+      100: "the video was removed or made private",
+      101: "the owner doesn't allow it outside YouTube",
+      150: "the owner doesn't allow it outside YouTube",
+    };
+    const reason = reasons[event.data] || `YouTube player error ${event.data}`;
+    if (track) track.unplayable = true;
+    const error = Object.assign(new Error(reason), {
+      boothMessage: `YouTube won't play ${track?.title || "this video"}: ${reason}. Skipping it.`,
+    });
+    lastError = error;
+
+    if (startWaiter) {
+      settleStart(error);
+      return;
+    }
+
+    // The video failed while playing: say why and move on.
+    if (deck === activeDeck && booth.playing) {
+      booth.message = error.boothMessage;
+      nextTrack(false);
+    }
+  }
+
+  function showVideo(visible) {
+    els.youtubeStage.hidden = !visible;
+    els.stage.classList.toggle("has-video", visible);
+  }
+
+  function setVolume(value) {
+    player?.setVolume(Math.round(clamp(value, 0, 1) * 100));
+  }
+
+  function stopTimers() {
+    window.clearInterval(fadeTimer);
+    window.clearInterval(progressTimer);
+  }
+
+  const deck = {
+    kind: "youtube",
+    label: "YouTube",
+    get loaded() {
+      return Boolean(track);
+    },
+    get currentTime() {
+      return player?.getCurrentTime?.() || 0;
+    },
+    set currentTime(value) {
+      player?.seekTo(value, true);
+    },
+    get duration() {
+      return player?.getDuration?.() || 0;
+    },
+    async load(item) {
+      await ensurePlayer();
+      track = item;
+      lastError = null;
+      needsStart = true;
+      showVideo(true);
+    },
+    preview() {
+      // Show the video's first frame while the booth is paused. Never cue right before
+      // playing: YouTube then ignores the play request and stays cued.
+      if (track && needsStart) player.cueVideoById(track.videoId);
+    },
+    async play() {
+      await ensurePlayer();
+      // YouTube already refused this video while cueing it.
+      if (track?.unplayable && lastError) throw lastError;
+
+      // A newly loaded video must start even while the previous one is still playing (a
+      // YouTube-to-YouTube switch); otherwise only start when paused or stopped.
+      if (needsStart || player.getPlayerState() !== youtubeStates.playing) {
+        await new Promise((resolve, reject) => {
+          const timer = window.setTimeout(() => {
+            startWaiter = null;
+            // Still buffering (or an ad is loading) counts as started.
+            if (player.getPlayerState() === youtubeStates.buffering) {
+              resolve();
+              return;
+            }
+            reject(Object.assign(new Error("YouTube did not start"), {
+              boothMessage: "YouTube didn't start. Press Play on the Mac once to unlock audio.",
+            }));
+          }, 10000);
+          startWaiter = { resolve, reject, timer };
+          // A new video starts with loadVideoById; playVideo only resumes a paused one.
+          if (needsStart) player.loadVideoById(track.videoId);
+          else player.playVideo();
+        });
+      }
+
+      window.clearInterval(progressTimer);
+      // The YouTube player has no timeupdate event, so poll it while it plays.
+      progressTimer = window.setInterval(() => {
+        if (deck === activeDeck) updatePlaybackProgress();
+      }, 500);
+    },
+    pause() {
+      window.clearInterval(progressTimer);
+      player?.pauseVideo();
+    },
+    stop() {
+      stopTimers();
+      settleStart(new Error("stopped"));
+      player?.stopVideo();
+      track = null;
+      showVideo(false);
+    },
+    setLevel(value) {
+      window.clearInterval(fadeTimer);
+      setVolume(value);
+    },
+    fade(curve, seconds) {
+      window.clearInterval(fadeTimer);
+      const started = performance.now();
+      fadeTimer = window.setInterval(() => {
+        const progress = Math.min(1, (performance.now() - started) / (seconds * 1000));
+        setVolume(curve[Math.round(progress * (curve.length - 1))]);
+        if (progress >= 1) window.clearInterval(fadeTimer);
+      }, 50);
+    },
+  };
+
+  return deck;
+}
+
+function withTimeout(promise, seconds, boothMessage) {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      reject(Object.assign(new Error("timed out"), { boothMessage }));
+    }, seconds * 1000);
+    promise.then((value) => {
+      window.clearTimeout(timer);
+      resolve(value);
+    }, (error) => {
+      window.clearTimeout(timer);
+      reject(error);
+    });
+  });
+}
+
+function loadYouTubeApi() {
+  if (window.YT?.Player) return Promise.resolve(window.YT);
+
+  if (!youtubeApi) {
+    youtubeApi = new Promise((resolve, reject) => {
+      window.onYouTubeIframeAPIReady = () => resolve(window.YT);
+      const script = document.createElement("script");
+      script.src = "https://www.youtube.com/iframe_api";
+      script.onerror = () => {
+        youtubeApi = null;
+        reject(Object.assign(new Error("YouTube player API failed to load"), {
+          boothMessage: "Couldn't load the YouTube player. Check the internet connection.",
+        }));
+      };
+      document.head.append(script);
+    });
+  }
+
+  return youtubeApi;
 }
 
 function rememberPlay(track) {
-  if (booth.history.at(-1) === track.id) return;
+  if (booth.history.at(-1) === track.id) return false;
   booth.history.push(track.id);
   track.plays += 1;
+  return true;
 }
 
 function nextTrack(useFade) {
   if (!booth.tracks.length) return;
   const nextIndex = chooseNextIndex();
+  if (nextIndex < 0) return;
   loadTrack(nextIndex, booth.playing, useFade);
 }
 
 function previousTrack() {
   if (!booth.tracks.length || isTransitioning) return;
-  const active = decks[activeDeck].el;
-  if (active.currentTime > 4) {
-    active.currentTime = 0;
+  if (activeDeck.currentTime > 4) {
+    activeDeck.currentTime = 0;
     return;
   }
 
@@ -653,14 +1088,22 @@ function previousTrack() {
 }
 
 function chooseNextIndex() {
-  if (!booth.autoDj || booth.tracks.length < 3) {
-    return (booth.currentIndex + 1) % booth.tracks.length;
+  const count = booth.tracks.length;
+  // In list order, skipping videos YouTube refused to play; -1 when nothing is playable.
+  let following = -1;
+  for (let step = 1; step <= count && following < 0; step += 1) {
+    const index = (booth.currentIndex + step) % count;
+    if (!booth.tracks[index].unplayable) following = index;
   }
+
+  if (!booth.autoDj || count < 3) return following;
 
   const target = booth.energy;
   const others = booth.tracks
     .map((track, index) => ({ track, index }))
-    .filter((item) => item.index !== booth.currentIndex);
+    .filter((item) => item.index !== booth.currentIndex && !item.track.unplayable);
+  if (!others.length) return following;
+
   // Every track plays once before any repeats, so Auto DJ can't bounce between two favorites.
   const fewestPlays = Math.min(...others.map((item) => item.track.plays));
   const candidates = others
@@ -671,7 +1114,7 @@ function chooseNextIndex() {
     }))
     .sort((a, b) => a.score - b.score);
 
-  return candidates[0]?.index ?? ((booth.currentIndex + 1) % booth.tracks.length);
+  return candidates[0].index;
 }
 
 function hypeMoment() {
@@ -684,15 +1127,18 @@ function hypeMoment() {
 }
 
 function updatePlaybackProgress() {
-  const active = decks[activeDeck].el;
   const currentTrack = booth.tracks[booth.currentIndex];
+  const duration = activeDeck.duration;
+  // While a YouTube ad plays, the player can report the ad's length. Only trust the player
+  // when it agrees with the video length the search returned.
+  const trusted = !(currentTrack?.kind === "youtube" && currentTrack.duration && Math.abs(duration - currentTrack.duration) > 5);
 
-  if (currentTrack && Number.isFinite(active.duration)) {
-    currentTrack.duration = active.duration;
+  if (currentTrack && duration > 0 && trusted) {
+    currentTrack.duration = duration;
   }
 
-  if (booth.autoDj && booth.playing && !isTransitioning && active.duration > 0) {
-    const remaining = active.duration - active.currentTime;
+  if (booth.autoDj && booth.playing && !isTransitioning && duration > 0 && trusted) {
+    const remaining = duration - activeDeck.currentTime;
     if (remaining <= Math.max(1.2, booth.crossfade + 0.25)) {
       nextTrack(true);
     }
@@ -739,7 +1185,7 @@ function renderDisplay() {
   els.energyReadout.textContent = String(booth.energy);
   els.crossfadeReadout.textContent = `${booth.crossfade}s`;
   els.autodjReadout.textContent = booth.autoDj ? "Auto DJ on" : "Manual";
-  els.deckIndicator.textContent = activeDeck === 0 ? "A" : "B";
+  els.deckIndicator.textContent = activeDeck.label;
   els.nextTrackTitle.textContent = nextTrack ? nextTrack.title : "No queue";
   els.roomModeReadout.textContent = mode;
   els.queueSizeReadout.textContent = String(booth.tracks.length);
@@ -749,9 +1195,8 @@ function renderDisplay() {
 }
 
 function renderPlaybackOnly() {
-  const active = decks[activeDeck].el;
-  const duration = active.duration || booth.tracks[booth.currentIndex]?.duration || 0;
-  const current = active.currentTime || 0;
+  const duration = activeDeck.duration || booth.tracks[booth.currentIndex]?.duration || 0;
+  const current = activeDeck.currentTime;
   const percent = duration ? clamp((current / duration) * 100, 0, 100) : 0;
 
   els.elapsedTime.textContent = formatTime(current);
@@ -761,7 +1206,7 @@ function renderPlaybackOnly() {
 
 function renderQueue() {
   if (!booth.tracks.length) {
-    els.queueList.innerHTML = `<div class="empty-state">Your queue will appear here after you load local music files.</div>`;
+    els.queueList.innerHTML = `<div class="empty-state">Your queue will appear here after you load music files or add songs from search.</div>`;
     return;
   }
 
@@ -779,12 +1224,12 @@ function renderQueue() {
     title.textContent = track.title;
     const meta = document.createElement("p");
     meta.className = "queue-meta";
-    meta.textContent = `${track.artist} - ${formatTime(track.duration)} - energy ${track.energy} - ${track.votes} votes`;
+    meta.textContent = `${track.artist} - ${formatTime(track.duration)}${sourceLabel(track)} - energy ${track.energy} - ${track.votes} votes`;
     info.append(title, meta);
 
     const actions = document.createElement("div");
     actions.className = "queue-actions";
-    const cue = actionButton("Cue", () => loadTrack(index, booth.playing, true));
+    const cue = actionButton("Cue", () => cueTrack(index, booth.playing));
     const vote = actionButton("Vote", () => {
       track.votes += 1;
       renderDisplay();
@@ -839,6 +1284,69 @@ function renderSearchResults(section, results) {
     row.append(info, actions);
     return row;
   }));
+}
+
+function renderYouTubeResults(section, results) {
+  const container = section.querySelector(".search-results");
+
+  if (!results.length) {
+    container.innerHTML = `<div class="empty-state">No results yet.</div>`;
+    return;
+  }
+
+  container.replaceChildren(...results.map((video) => {
+    const row = document.createElement("article");
+    row.className = "search-result has-thumb";
+
+    const thumb = document.createElement("img");
+    thumb.className = "search-thumb";
+    thumb.alt = "";
+    thumb.loading = "lazy";
+    if (video.thumbnail) thumb.src = video.thumbnail;
+
+    const info = document.createElement("div");
+    const title = document.createElement("p");
+    title.className = "search-result-title";
+    title.textContent = video.title;
+    const meta = document.createElement("p");
+    meta.className = "search-result-meta";
+    meta.textContent = `${video.channel} - ${formatTime(video.duration)} - YouTube`;
+    info.append(title, meta);
+
+    // Play and queue only: YouTube videos are never downloaded.
+    const actions = document.createElement("div");
+    actions.className = "search-result-actions";
+    const playNow = actionButton("Play now", () => queueYouTube(section, video, true));
+    const add = actionButton("Add to queue", () => {
+      queueYouTube(section, video, false);
+      add.textContent = "Added";
+    });
+
+    const source = document.createElement("a");
+    source.className = "search-link";
+    source.href = video.url;
+    source.target = "_blank";
+    source.rel = "noreferrer";
+    source.textContent = "YouTube";
+
+    actions.append(playNow, add, source);
+    row.append(thumb, info, actions);
+    return row;
+  }));
+}
+
+function queueYouTube(section, video, playNow) {
+  const status = section.querySelector(".search-status");
+
+  if (isRemote) {
+    sendCommand({ type: "addYouTube", video, playNow });
+  } else {
+    addYouTubeTrack(video, playNow);
+  }
+
+  status.textContent = playNow
+    ? `Playing ${video.title} on the booth.`
+    : `Added ${video.title} to the booth queue.`;
 }
 
 async function downloadSearchResult(section, result, button) {
@@ -927,7 +1435,7 @@ function renderRemote() {
     title.textContent = track.title;
     const meta = document.createElement("p");
     meta.className = "queue-meta";
-    meta.textContent = `${track.artist} - ${formatTime(track.duration)} - ${track.votes || 0} votes`;
+    meta.textContent = `${track.artist} - ${formatTime(track.duration)}${sourceLabel(track)} - ${track.votes || 0} votes`;
     info.append(title, meta);
 
     const actions = document.createElement("div");
@@ -957,13 +1465,12 @@ function syncFromDisplay(force = false) {
   if (!force && now - lastSync < 650) return;
   lastSync = now;
 
-  const active = decks[activeDeck].el;
   const currentTrack = booth.tracks[booth.currentIndex];
   socket.emit("display:state", {
     playlist: booth.tracks.map(publicTrack),
     currentTrackId: currentTrack?.id || null,
-    currentTime: active.currentTime || 0,
-    duration: active.duration || currentTrack?.duration || 0,
+    currentTime: activeDeck.currentTime,
+    duration: activeDeck.duration || currentTrack?.duration || 0,
     playing: booth.playing,
     energy: booth.energy,
     crossfade: booth.crossfade,
@@ -977,12 +1484,17 @@ function syncFromDisplay(force = false) {
 function publicTrack(track) {
   return {
     id: track.id,
+    kind: track.kind,
     title: track.title,
     artist: track.artist,
     duration: track.duration,
     energy: track.energy,
     votes: track.votes,
   };
+}
+
+function sourceLabel(track) {
+  return track.kind === "youtube" ? " - YouTube" : "";
 }
 
 function drawVisualizer() {
@@ -1006,12 +1518,14 @@ function drawVisualizer() {
     const barWidth = (width - gap * (bars - 1)) / bars;
     const hype = Date.now() < booth.hypeUntil;
     const energy = booth.energy / 100;
+    // YouTube audio plays inside YouTube's player and never reaches the analyser.
+    const live = analyser && activeDeck.kind === "audio";
 
     for (let i = 0; i < bars; i += 1) {
       const sampleIndex = Math.floor((i / bars) * (analyserData?.length || 1));
       const audioValue = analyserData ? analyserData[sampleIndex] / 255 : 0;
       const idle = 0.18 + Math.sin(now / 260 + i * 0.42) * 0.12 + energy * 0.22;
-      const value = analyser ? Math.max(audioValue, 0.05) : idle;
+      const value = live ? Math.max(audioValue, 0.05) : idle;
       const barHeight = Math.max(12, value * height * (hype ? 0.9 : 0.72));
       const x = i * (barWidth + gap);
       const y = height - barHeight;

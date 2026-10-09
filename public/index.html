@@ -54,6 +54,9 @@
         <section id="display-view" class="display-grid">
           <div class="stage">
             <canvas id="visualizer" width="1200" height="680"></canvas>
+            <div id="youtube-stage" class="youtube-stage" hidden>
+              <div id="youtube-player"></div>
+            </div>
             <div class="stage-chrome" aria-hidden="true">
               <span></span>
               <span></span>
@@ -135,8 +138,12 @@
               <div class="card-head">
                 <div>
                   <p class="eyebrow">Find Music</p>
-                  <h2>Search downloads</h2>
+                  <h2>Search music</h2>
                 </div>
+              </div>
+              <div class="source-tabs" role="group" aria-label="Search source">
+                <button type="button" class="source-tab is-selected" data-source="archive" aria-pressed="true">Open audio</button>
+                <button type="button" class="source-tab" data-source="youtube" aria-pressed="false">YouTube</button>
               </div>
               <form class="search-form">
                 <input class="search-input" type="search" placeholder="Song, artist, vibe" autocomplete="off">
@@ -183,14 +190,18 @@
             <div class="section-title">
               <div>
                 <p class="eyebrow">Find Music</p>
-                <h2>Download locally</h2>
+                <h2>Search music</h2>
               </div>
+            </div>
+            <div class="source-tabs" role="group" aria-label="Search source">
+              <button type="button" class="source-tab is-selected" data-source="archive" aria-pressed="true">Open audio</button>
+              <button type="button" class="source-tab" data-source="youtube" aria-pressed="false">YouTube</button>
             </div>
             <form class="search-form">
               <input class="search-input" type="search" placeholder="Song, artist, vibe" autocomplete="off">
               <button class="search-button" type="submit">Search</button>
             </form>
-            <p class="search-status">Open audio sources only.</p>
+            <p class="search-status">Open audio collections, saved locally.</p>
             <div class="search-results"></div>
           </div>
 
