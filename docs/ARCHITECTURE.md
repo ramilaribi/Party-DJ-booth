@@ -71,6 +71,7 @@ YouTube tracks are streamed, never stored. The booth plays them through YouTube'
 6. Phone sends commands with `remote:command`.
 7. Server forwards commands as `player:command` to the booth only (the `booth` room), so phones never see each other's commands. Guest commands are checked and rebuilt first (see [Guests](#guests)).
 8. Mac handles commands and rebroadcasts updated state.
+9. Mac sends guests' song requests with `display:requests`. The server keeps the latest list and passes it to DJ phones only (the `remotes` room) as `requests`, and sends it to each DJ phone when it connects.
 
 Socket.IO resends the handshake on every reconnect, so after a Wi-Fi drop the server checks the role again and counts the device correctly. After a server restart the session code is new, so phones with the old link are refused and show **Scan the QR code again**.
 
@@ -98,6 +99,8 @@ The server trusts three kinds of clients.
 | Socket as `guest`, `remote:command` vote / unvote / request | yes | no | yes | no |
 | `GET /api/search`, `POST /api/download` | yes | yes | no | no |
 | `GET /api/youtube/search`, `GET /api/youtube/playlist` | yes | yes | no | no |
+| `display:requests` (send the request list) | yes | no | no | no |
+| `requests` (receive the request list) | no | yes | no | no |
 | `GET /api/session` (QR codes and session code) | yes | no | no | no |
 | `GET /api/downloads`, `/music/*` | yes | no | no | no |
 
@@ -255,9 +258,17 @@ Phone: keyboard dictation -> voice box -> remote:command {type: "voice", text} -
 
 **Votes.** The booth keeps a `voters` set on each track. A guest vote counts only if that voter isn't in the set yet, and `unvote` removes it again. DJ votes (from the booth or the DJ remote) always count. The guest phone keeps its own voted track ids in local storage, tagged with the guest code, so the buttons survive a reload and start fresh after a server restart.
 
-**Requests.** `booth.requests` holds up to 30 requests, newest first. `requestKey()` in `voice.js` normalizes the text (lower case, no punctuation, no "can you play" or "please"), so the same song typed two ways merges into one request with a set of voters. `renderRequests()` sorts by how many guests asked, then by time, and runs `findQueuedTrack` on each one to offer **Play next** when the song is already queued. Requests stay on the booth: the shared state only carries a count in `booth.message`, and `guestRequests` (on or off), which the guest page uses to show or hide its request box.
+**Requests.** `booth.requests` holds up to 30 requests, newest first. `requestKey()` in `voice.js` normalizes the text (lower case, no punctuation, no "can you play" or "please"), so the same song typed two ways merges into one request with a set of voters. `renderRequests()` sorts by how many guests asked, then by time, and runs `findQueuedTrack` on each one to offer **Play next** when the song is already queued. Requests stay on the booth and DJ phones (see [Phone Remote](#phone-remote)): the shared state only carries a count in `booth.message`, and `guestRequests` (on or off), which the guest page uses to show or hide its request box.
 
 **QR card.** `/api/session` returns both links and QR images. The card shows the DJ code until a DJ phone is paired (`presence.remotes > 0`). Then `switchToGuestQr()` changes it to the guest code, unless someone picked a tab by hand.
+
+## Phone Remote
+
+- **No queued commands.** Socket.IO buffers emits while disconnected and sends them all on reconnect, which could fire three Nexts at once. `sendCommand()` checks `connectionProblem()` first and drops the command instead, nudging the banner. The problems, in order: the server refused the link (`not-authorized`), the socket isn't connected, or no booth is connected (`connectedDisplays` from `state` and `presence`).
+- **Sliders.** `holdWhileDragging()` marks a slider as held from `pointerdown` until 1.5 seconds after it's let go, and `setRemoteSlider()` skips held sliders. The booth's state, sent every 700 ms, can't pull a slider back mid-drag. Phone sliders draw their own track; `--fill` sets how much of it is lit.
+- **Queue.** `renderRemote()` redraws the queue only when a signature of the rows (ids, titles, votes, Up next positions, the current track, and a guest's own votes) changes, so a button doesn't get replaced under a finger.
+- **State for the phone.** The booth adds `nextTrackId` (from `chooseNextIndex`, worked out in `renderDisplay`), `youtubeSearch` (so the phone's Search on a request picks YouTube when it's set up), and each YouTube track's `videoId` (for the artwork, from `i.ytimg.com`).
+- **Requests.** The booth publishes the sorted list, with each request's queue match already worked out, whenever it changes. A DJ phone's Play next and Done send `requestPlayNext` and `requestDone`, which run the same code as the booth's buttons.
 
 ## Play History
 

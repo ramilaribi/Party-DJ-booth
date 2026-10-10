@@ -97,22 +97,21 @@ Not verified yet:
 
 Found in the 2026-10-09 code review and not fixed yet, most important first:
 
-1. **Large libraries are slow.** Each imported file triggers a full queue re-render and a full playlist broadcast. The whole playlist is also resent every 700 ms.
+1. **Large libraries are slow.** Each imported file triggers a full queue re-render and a full playlist broadcast. The whole playlist is also resent every 700 ms. (Phones now skip redrawing the queue when nothing in it changed.)
 2. **Two booth tabs both play.** Every remote command reaches every open booth tab.
-3. **Remote sliders jump while dragging.** Incoming state resets the phone's slider values mid-drag.
-4. **Download leftovers.** A failed download leaves a `.download` temp file. Parallel downloads of the same file share one temp path.
-5. **Pairing ends when the server restarts.** The session code is regenerated on every start, so phones must scan the QR code again. This is safer, but an installed PWA would need a way to keep or renew pairing.
-6. **YouTube decks have no effects.** YouTube's audio never reaches Web Audio, so a YouTube deck has no EQ, filter, tempo, BPM, or beat matching, and transitions from it fall back to a crossfade.
-7. **No visualizer or EQ on YouTube tracks.** Their audio stays inside YouTube's cross-origin player and can't reach Web Audio.
-8. **A YouTube start can't be retried mid-transition.** A video that times out while starting is skipped for this round and retried in the next one.
-9. **Voice is push-to-talk and English only.** There's no always-listening wake word yet, and the parser only knows English phrases. French commands would need a second pattern set and a language switch for the recognizer.
-10. **Chrome's speech recognition is online.** It sends audio to Google's servers and needs internet. Safari uses on-device macOS Dictation when it's enabled.
-11. **No loops yet.** They need an `AudioBufferSourceNode` playback engine instead of `<audio>` elements.
-12. **BPM detection assumes a steady tempo.** Songs with tempo changes, live drums, or no clear kick may get a wrong BPM or "no steady beat". Beat matching then lands off-beat, or is skipped.
-13. **Manual mix keeps matched tempos.** After Sync or an automatic fade in Manual mix, the deck stays at the matched tempo; only Auto mix eases back. A long Manual mix session can drift away from the songs' original tempos.
-14. **Two videos share the stage during a mix.** Each YouTube player must stay visible while it plays, so the stage splits into two smaller videos for the length of a YouTube-to-YouTube transition.
-15. **Guest votes are counted per network address.** Phones that reach the Mac through one shared address (rare on home Wi-Fi, possible on some venue networks) share one vote per song.
-16. **Song requests only show on the Mac.** The DJ's phone doesn't list guests' requests yet.
+3. **Download leftovers.** A failed download leaves a `.download` temp file. Parallel downloads of the same file share one temp path.
+4. **Pairing ends when the server restarts.** The session code is regenerated on every start, so phones must scan the QR code again. This is safer, but an installed PWA would need a way to keep or renew pairing.
+5. **YouTube decks have no effects.** YouTube's audio never reaches Web Audio, so a YouTube deck has no EQ, filter, tempo, BPM, or beat matching, and transitions from it fall back to a crossfade.
+6. **No visualizer or EQ on YouTube tracks.** Their audio stays inside YouTube's cross-origin player and can't reach Web Audio.
+7. **A YouTube start can't be retried mid-transition.** A video that times out while starting is skipped for this round and retried in the next one.
+8. **Voice is push-to-talk and English only.** There's no always-listening wake word yet, and the parser only knows English phrases. French commands would need a second pattern set and a language switch for the recognizer.
+9. **Chrome's speech recognition is online.** It sends audio to Google's servers and needs internet. Safari uses on-device macOS Dictation when it's enabled.
+10. **No loops yet.** They need an `AudioBufferSourceNode` playback engine instead of `<audio>` elements.
+11. **BPM detection assumes a steady tempo.** Songs with tempo changes, live drums, or no clear kick may get a wrong BPM or "no steady beat". Beat matching then lands off-beat, or is skipped.
+12. **Manual mix keeps matched tempos.** After Sync or an automatic fade in Manual mix, the deck stays at the matched tempo; only Auto mix eases back. A long Manual mix session can drift away from the songs' original tempos.
+13. **Two videos share the stage during a mix.** Each YouTube player must stay visible while it plays, so the stage splits into two smaller videos for the length of a YouTube-to-YouTube transition.
+14. **Guest votes are counted per network address.** Phones that reach the Mac through one shared address (rare on home Wi-Fi, possible on some venue networks) share one vote per song.
+15. **Vibration is Android only.** iPhones don't support the Vibration API, so a tap there only flashes.
 
 ## Important Boundary
 
@@ -327,7 +326,20 @@ How it was verified: 73 unit tests (new request-key test). A scripted test (35 c
 
 Not verified yet: real phones on Wi-Fi (the in-app browser reached the scratch server at `localhost`, so every test guest had the same address).
 
-Next in the backlog: item 4, Better Phone Remote.
+**Done on 2026-10-10: backlog item 4, Better Phone Remote.**
+
+- **Transport bar:** Prev, Play, Next, and Hype sit in a bar fixed to the bottom of the DJ phone's screen (safe-area aware), with a wider Play. Taps flash, and buzz where the Vibration API exists.
+- **Now playing:** the next song (`nextTrackId` in the booth state), YouTube artwork behind the title (`videoId` in `publicTrack`), and four energy presets (Afterglow 15, Warmup 38, Groove 60, Peak 86, matching the voice modes).
+- **Queue:** redrawn only when its rows change, so buttons stay put. The playing song shows "Now playing" instead of buttons. Play now is highlighted.
+- **Sliders:** big thumbs with a filled track, and held while dragged plus 1.5 seconds, so the booth's echo can't move them. This fixes the old "Remote sliders jump while dragging" issue.
+- **Connection banner:** Connecting / Reconnecting, The booth isn't open, or This link is out of date, with controls dimmed. `sendCommand()` drops commands while any of these show, instead of letting Socket.IO buffer them and fire them all on reconnect.
+- **Requests on the DJ phone:** the booth sends its sorted request list with `display:requests`; the server passes it only to DJ phones (`remotes` room) and replays it to phones that join later. Play next and Done from the phone run the booth's own code; Search fills the phone's Find Music card. This fixes the old "Song requests only show on the Mac" issue.
+
+How it was verified: 73 unit tests. A scripted test of the request list (9 checks): it reaches DJ phones on connect and on change, keeps only id, text, count, and match, trims long text and bad counts, caps at 30, never reaches guests, can't be set by phones, and turns junk into an empty list. The 35 guest checks and 16 security checks still pass. In the browser, at phone size: the bar fixed at the bottom with no horizontal scroll; a slider held at a value through several booth updates, then catching up after release; the same queue row element surviving 5 seconds of updates; Peak and Next reaching the booth; guests' requests appearing on the DJ phone, with Play next putting a song up next on both screens and Done clearing another; the booth closing (banner, dimmed controls, a dropped tap) and reopening; the server stopping (Reconnecting) and a Play pressed then not firing after the server came back; an old code over the Mac's network address showing This link is out of date. The DJ remote and a guest also worked over the Mac's network address (`192.168.1.14`), and two guests on different addresses gave a song 2 votes.
+
+Not verified yet: a real iPhone and Android phone (touch drag on sliders, the safe-area bar, vibration).
+
+Next in the backlog: item 5, Party Recovery Button.
 
 For the current experience-upgrade backlog, see [docs/EXPERIENCE_UPGRADES.md](docs/EXPERIENCE_UPGRADES.md). Suggested order:
 

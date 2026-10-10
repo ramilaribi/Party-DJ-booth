@@ -61,14 +61,17 @@ The Mac booth has:
 
 The phone remote has:
 
-- Play, pause, previous, next, and hype controls.
+- Prev, Play, Next, and Hype in a bar fixed to the bottom of the screen, in thumb reach. Each tap flashes (and buzzes on Android) when it reaches the booth.
+- Now playing with progress, the song coming next, and the video's artwork for YouTube songs.
+- One-tap energy presets: Afterglow, Warmup, Groove, and Peak.
+- Guests' song requests, with Play next, Search, and Done.
 - Music search and download to the Mac.
 - YouTube search with Play now, Add to queue, Add all, and YouTube playlist import.
 - One-tap buttons for recent searches.
 - Voice commands through the phone keyboard's dictation key.
-- Volume, energy, and crossfade sliders, and the transition style.
-- Live now-playing progress.
-- Queue browsing with Play now, Play next, and Vote.
+- Volume, energy, and crossfade sliders with big thumbs that stay where you put them while you drag, and the transition style.
+- Queue browsing with Play now, Play next, and Vote. The song that's playing is marked Now playing.
+- A banner when the phone can't control the booth, saying why (see [Phone Cannot Connect](#phone-cannot-connect)).
 
 The guest view has:
 
@@ -120,9 +123,9 @@ Guests get their own QR code. They can join the party from their phones without 
 
 Everything else (play, pause, next, previous, hype, volume, energy, crossfade, transitions, search, and downloads) is refused by the server, not just hidden.
 
-**Requests** land in the **Song requests** card on the Mac, most-asked first. The same song typed two ways ("Blinding Lights - The Weeknd", "can you play blinding lights please") counts as one request with more guests behind it. When a request matches a song already in your queue, the row says so and offers **Play next**. **Search** puts the request into Find Music (YouTube when it's set up), and **Done** clears it. Turn off **Take song requests** to hide the request box on guests' phones. They can still vote.
+**Requests** land in the **Song requests** card on the Mac and on your DJ phone, most-asked first. The same song typed two ways ("Blinding Lights - The Weeknd", "can you play blinding lights please") counts as one request with more guests behind it. When a request matches a song already in your queue, the row says so and offers **Play next**. **Search** puts the request into Find Music (YouTube when it's set up), and **Done** clears it. Turn off **Take song requests** to hide the request box on guests' phones. They can still vote.
 
-Guests' words stay in your request list: other phones and the stage only see "New song request (3 waiting)".
+Guests' words only show on the Mac and your DJ phone. Guests' phones and the stage only see "New song request (3 waiting)".
 
 **Limits:** each guest phone can send 30 vote taps and 3 requests a minute. A phone is recognized by its network address, so it gets one vote per song however many browser tabs it opens.
 
@@ -316,6 +319,14 @@ Crossfades run on the browser's audio clock, so they still finish if the booth w
 - Useful before a chorus, drop, or room reset.
 
 ## Phone Cannot Connect
+
+The phone shows a banner at the top when it can't control the booth, and dims its controls. Taps aren't saved up for later: nothing is sent until the banner goes away, so a Next pressed during a Wi-Fi drop won't skip a song when the phone reconnects.
+
+| Banner | What it means |
+| --- | --- |
+| **Reconnecting to the booth…** | The phone lost the server, often a Wi-Fi drop. It reconnects by itself. |
+| **The booth isn't open** | The server is fine, but the booth page on the Mac is closed. Open `http://localhost:4242` on the Mac. |
+| **This link is out of date** | The server restarted, so the code changed. Scan the QR code again. |
 
 Try these checks:
 

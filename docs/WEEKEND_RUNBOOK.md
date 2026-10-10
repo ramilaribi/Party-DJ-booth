@@ -39,7 +39,8 @@ Play three kinds of songs:
 Check:
 
 - Speaker volume is strong but not distorted.
-- Next and previous work from the phone.
+- Next and previous work from the phone's bottom bar, and each tap flashes.
+- The phone's energy presets (Warmup, Groove, Peak) move the booth's energy.
 - Crossfade works.
 - Crossfade still works with the booth hidden: put another window in front during a fade and listen for the next song coming in.
 - The QR code opens the remote.
@@ -74,7 +75,7 @@ Use voice when your hands are busy: "next", "louder", "more energy", or "play" a
 
 Use votes as a signal, not a command. If a song gets votes but would kill the room, leave it for later.
 
-Check **Song requests** on the Mac now and then. A request that's already in your queue has **Play next**; for the rest, **Search** finds it. Press **Done** when you've dealt with one. If requests get silly, turn off **Take song requests**. Guests can still vote.
+Check **Song requests** on the Mac or your phone now and then. A request that's already in your queue has **Play next**; for the rest, **Search** finds it. Press **Done** when you've dealt with one. If requests get silly, turn off **Take song requests**. Guests can still vote.
 
 If someone asks for a song you do not have, use Find Music. Open audio searches legal collections and saves matching downloads on the Mac. YouTube finds almost anything and plays it on the booth right away, but it needs internet and can show ads.
 
@@ -93,6 +94,8 @@ If a YouTube song won't play:
 3. If search says the daily limit is used up, use Open audio or your own files until midnight Pacific time.
 
 If the phone remote disconnects:
+
+The banner at the top of the phone says why: **Reconnecting** (Wi-Fi), **The booth isn't open** (the Mac page closed), or **This link is out of date** (server restarted). Taps aren't sent while it shows, so nothing fires late.
 
 1. Keep music playing on the Mac.
 2. Re-scan the QR code. After a server restart this is required, because the session code in the link changes. Guests need to scan the new **Guests** code too.

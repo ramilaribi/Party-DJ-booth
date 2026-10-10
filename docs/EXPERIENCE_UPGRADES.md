@@ -7,7 +7,7 @@ Use this as the working list for making Party DJ Booth more useful during a real
 1. Preflight / Sound Check Mode (done 2026-10-10)
 2. Real Play Next (done 2026-10-10)
 3. Guest Vote QR (done 2026-10-10)
-4. Better Phone Remote
+4. Better Phone Remote (done 2026-10-10)
 5. Party Recovery Button
 6. PWA Install Mode
 7. Queue Sections
@@ -99,6 +99,8 @@ Why it helps:
 - Friends can participate without getting full control of the booth.
 
 ## 4. Better Phone Remote
+
+**Status: done (2026-10-10).** Fixed bottom transport bar, energy presets, the next song and YouTube artwork, steady queue and sliders, a connection banner that also stops late commands, bigger slider thumbs, and guests' requests on the DJ phone; see the phone remote list and Phone Cannot Connect in the README.
 
 Make the remote feel like a reliable controller under party conditions.
 
