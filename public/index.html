@@ -179,16 +179,39 @@
             </div>
 
             <div class="card qr-card">
-              <div class="qr-wrap">
-                <img id="qr-code" alt="Phone remote QR code">
+              <div class="source-tabs qr-tabs" role="group" aria-label="Which QR code to show">
+                <button type="button" class="source-tab is-selected" data-qr="dj" aria-pressed="true">DJ remote</button>
+                <button type="button" class="source-tab" data-qr="guest" aria-pressed="false">Guests</button>
               </div>
-              <div>
-                <p class="eyebrow">Phone Remote</p>
-                <p id="remote-url" class="remote-url">Starting local link...</p>
+              <div class="qr-body">
+                <div class="qr-wrap">
+                  <img id="qr-code" alt="Phone remote QR code">
+                </div>
+                <div>
+                  <p id="qr-label" class="eyebrow">Phone Remote</p>
+                  <p id="remote-url" class="remote-url">Starting local link...</p>
+                  <p id="qr-hint" class="qr-hint">Full control of the booth. Keep this one for yourself.</p>
+                </div>
               </div>
+              <button id="guest-qr-show" class="queue-action" type="button" hidden>Show big for guests</button>
             </div>
 
             <button id="sound-check-btn" class="queue-action sound-check-open" type="button">Sound check</button>
+
+            <div class="card requests-card">
+              <div class="card-head">
+                <div>
+                  <p class="eyebrow">Guests</p>
+                  <h2>Song requests</h2>
+                </div>
+                <span id="requests-count" class="pill muted">0 waiting</span>
+              </div>
+              <label class="switch-row">
+                <span>Take song requests</span>
+                <input id="requests-toggle" type="checkbox" checked>
+              </label>
+              <div id="requests-list" class="requests-list"></div>
+            </div>
           </aside>
         </section>
 
@@ -202,6 +225,17 @@
           </div>
           <p id="sound-check-summary" class="search-status"></p>
           <ol id="sound-check-list" class="sound-check-list"></ol>
+        </dialog>
+
+        <dialog id="guest-qr-dialog" class="guest-qr-dialog" aria-labelledby="guest-qr-title">
+          <p class="eyebrow">Guests</p>
+          <h2 id="guest-qr-title">Scan to vote and request songs</h2>
+          <div class="qr-wrap guest-qr-big">
+            <img id="guest-qr-big" alt="Guest QR code">
+          </div>
+          <p id="guest-qr-url" class="remote-url"></p>
+          <p class="search-status">Join the same Wi-Fi as the booth first. Guests can vote and ask for songs, nothing else.</p>
+          <button id="guest-qr-close" class="queue-action" type="button">Close</button>
         </dialog>
 
         <section class="mixer-panel" aria-label="DJ mixer">
@@ -306,14 +340,28 @@
             </div>
           </div>
 
-          <div class="remote-pad">
+          <div id="guest-request" class="remote-card" hidden>
+            <div class="section-title">
+              <div>
+                <p class="eyebrow">Request</p>
+                <h2>Ask for a song</h2>
+              </div>
+            </div>
+            <form id="guest-request-form" class="search-form">
+              <input id="guest-request-input" class="search-input" type="text" maxlength="100" placeholder="Song and artist" autocomplete="off" enterkeyhint="send" aria-label="Song request">
+              <button class="search-button" type="submit">Send</button>
+            </form>
+            <p id="guest-request-status" class="search-status">The DJ sees your request on the booth and picks what plays.</p>
+          </div>
+
+          <div class="remote-pad" data-dj-only>
             <button data-command="previous" class="remote-button">Prev</button>
             <button data-command="playPause" class="remote-button primary">Play</button>
             <button data-command="next" class="remote-button">Next</button>
             <button data-command="hype" class="remote-button hot">Hype</button>
           </div>
 
-          <div class="remote-card voice-control">
+          <div class="remote-card voice-control" data-dj-only>
             <div class="section-title">
               <div>
                 <p class="eyebrow">Voice</p>
@@ -328,7 +376,7 @@
             <p class="search-status voice-status">Tap the box, then the microphone on your keyboard, and say “next”, “louder”, or “play” and a song.</p>
           </div>
 
-          <div class="remote-card music-search">
+          <div class="remote-card music-search" data-dj-only>
             <div class="section-title">
               <div>
                 <p class="eyebrow">Find Music</p>
@@ -348,7 +396,7 @@
             <div class="search-results"></div>
           </div>
 
-          <div class="remote-card">
+          <div class="remote-card" data-dj-only>
             <label>
               <span>Volume</span>
               <input id="remote-volume" type="range" min="0" max="100" value="100">
@@ -380,6 +428,7 @@
               <p class="eyebrow">Queue</p>
               <span id="remote-queue-count">0 tracks</span>
             </div>
+            <p id="guest-queue-hint" class="search-status" hidden>Vote for the songs you want to hear. Votes help them play sooner.</p>
             <div id="remote-queue" class="remote-queue"></div>
           </div>
         </section>

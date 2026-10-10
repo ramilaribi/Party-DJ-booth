@@ -38,13 +38,20 @@ const io = new Server(server);
 const publicDir = path.join(__dirname, "public");
 const downloadsDir = path.join(__dirname, "music-downloads");
 const libraryFile = path.join(__dirname, ".music-library.json");
+// Two secrets, both new on every start: the DJ remote's code (full control) and the guests' code
+// (vote and request only). Each QR link carries one of them.
 const sessionCode = crypto.randomBytes(6).toString("base64url");
+const guestCode = crypto.randomBytes(6).toString("base64url");
+// How many votes (taking one back counts too) and song requests one guest phone may send a minute.
+const guestLimits = { vote: 30, request: 3 };
+const guestActivity = new Map();
 
 await fs.promises.mkdir(downloadsDir, { recursive: true });
 
 let partyState = {
   connectedDisplays: 0,
   connectedRemotes: 0,
+  connectedGuests: 0,
   playlist: [],
   currentTrackId: null,
   currentTime: 0,
@@ -115,10 +122,18 @@ function isBooth(address, headers) {
   return loopbackAddresses.has(address) && loopbackHosts.has(hostName(headers.host)) && isSameOrigin(headers);
 }
 
-function isPairedRemote(code, headers) {
+function codeMatches(code, expectedCode) {
   const given = Buffer.from(String(code || ""));
-  const expected = Buffer.from(sessionCode);
-  return given.length === expected.length && crypto.timingSafeEqual(given, expected) && isSameOrigin(headers);
+  const expected = Buffer.from(expectedCode);
+  return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+}
+
+function isPairedRemote(code, headers) {
+  return codeMatches(code, sessionCode) && isSameOrigin(headers);
+}
+
+function isGuest(code, headers) {
+  return codeMatches(code, guestCode) && isSameOrigin(headers);
 }
 
 function requireBooth(req, res, next) {
@@ -344,10 +359,8 @@ app.use("/music", requireBooth, express.static(downloadsDir, {
   },
 }));
 
-app.get("/api/session", requireBooth, async (req, res) => {
-  const origin = baseUrl(req);
-  const remoteUrl = `${remoteBaseUrl(req)}/?remote=1&session=${sessionCode}`;
-  const qrDataUrl = await QRCode.toDataURL(remoteUrl, {
+function qrCode(url) {
+  return QRCode.toDataURL(url, {
     margin: 1,
     width: 360,
     color: {
@@ -355,12 +368,20 @@ app.get("/api/session", requireBooth, async (req, res) => {
       light: "#f7fff7",
     },
   });
+}
+
+app.get("/api/session", requireBooth, async (req, res) => {
+  const origin = baseUrl(req);
+  const remoteUrl = `${remoteBaseUrl(req)}/?remote=1&session=${sessionCode}`;
+  const guestUrl = `${remoteBaseUrl(req)}/?guest=1&session=${guestCode}`;
 
   res.json({
     sessionCode,
     localDisplayUrl: origin,
     localRemoteUrl: remoteUrl,
-    qrDataUrl,
+    qrDataUrl: await qrCode(remoteUrl),
+    guestUrl,
+    guestQrDataUrl: await qrCode(guestUrl),
     youtubeSearch: Boolean(youtubeApiKey),
     state: partyState,
   });
@@ -550,7 +571,7 @@ app.post("/api/download", requirePairing, async (req, res) => {
     };
 
     await upsertLibraryTrack(track);
-    io.emit("download:ready", track);
+    io.to("booth").emit("download:ready", track);
     res.json({ track });
   } catch (error) {
     res.status(502).json({
@@ -563,21 +584,65 @@ app.post("/api/download", requirePairing, async (req, res) => {
 function updatePresence() {
   let displays = 0;
   let remotes = 0;
+  let guests = 0;
 
   // Count live sockets instead of keeping running totals, so reconnects can't push the
   // numbers out of sync.
   for (const client of io.of("/").sockets.values()) {
     if (client.data.role === "display") displays += 1;
     if (client.data.role === "remote") remotes += 1;
+    if (client.data.role === "guest") guests += 1;
   }
 
   partyState.connectedDisplays = displays;
   partyState.connectedRemotes = remotes;
-  io.emit("presence", { displays, remotes });
+  partyState.connectedGuests = guests;
+  io.emit("presence", { displays, remotes, guests });
+}
+
+// Sliding one-minute window per phone address and kind of action.
+function allowGuestAction(address, type) {
+  const kind = type === "unvote" ? "vote" : type;
+  const key = `${address} ${kind}`;
+  const now = Date.now();
+  const recent = (guestActivity.get(key) || []).filter((at) => now - at < 60000);
+  const allowed = recent.length < guestLimits[kind];
+  if (allowed) recent.push(now);
+  guestActivity.set(key, recent);
+  return allowed;
+}
+
+// Guests can vote, take a vote back, and ask for a song. Anything else is dropped, and what is
+// forwarded is rebuilt from checked fields. The voter is the phone's network address, so one phone
+// gets one vote per song however many tabs it opens.
+function guestCommand(socket, command) {
+  const type = String(command.type || "");
+  const voter = socket.handshake.address;
+  let forwarded = null;
+
+  if (type === "request") {
+    // Control characters and right-to-left overrides could garble the booth's request list.
+    const cleaned = String(command.text || "").replace(/[\p{Cc}\u202A-\u202E\u2066-\u2069]/gu, " ").replace(/\s+/g, " ").trim();
+    const text = Array.from(cleaned).slice(0, 100).join("");
+    if (text.length >= 2) forwarded = { type, text, voter };
+  } else if (type === "vote" || type === "unvote") {
+    const trackId = String(command.trackId || "");
+    if (/^[A-Za-z0-9-]{1,64}$/.test(trackId)) forwarded = { type, trackId, voter };
+  }
+
+  if (!forwarded) return null;
+  if (!allowGuestAction(voter, type)) {
+    socket.emit("guest:notice", type === "request"
+      ? { about: "request", text: "That's a lot of requests. Wait a minute before sending another." }
+      : { about: "vote", text: "That's a lot of votes. Wait a minute, then try again." });
+    return null;
+  }
+  return forwarded;
 }
 
 // Every connection declares its role in the handshake, and every reconnect repeats it.
-// The booth must be this Mac at localhost; a phone must carry the session code from the QR link.
+// The booth must be this Mac at localhost; a DJ remote must carry the session code from its QR
+// link, and a guest the guest code from theirs. The booth may open either phone view to test it.
 io.use((socket, next) => {
   const { role, session } = socket.handshake.auth || {};
   const { address, headers } = socket.handshake;
@@ -595,10 +660,18 @@ io.use((socket, next) => {
     return;
   }
 
+  if (role === "guest" && (booth || isGuest(session, headers))) {
+    socket.data.role = "guest";
+    next();
+    return;
+  }
+
   next(new Error("not-authorized"));
 });
 
 io.on("connection", (socket) => {
+  // Commands and downloads go only to the booth, so phones never see each other's commands.
+  if (socket.data.role === "display") socket.join("booth");
   updatePresence();
   socket.emit("state", partyState);
 
@@ -611,13 +684,23 @@ io.on("connection", (socket) => {
       ...incoming,
       connectedDisplays: partyState.connectedDisplays,
       connectedRemotes: partyState.connectedRemotes,
+      connectedGuests: partyState.connectedGuests,
     };
     socket.broadcast.emit("state", partyState);
   });
 
-  socket.on("remote:command", (command = {}) => {
-    io.emit("player:command", {
-      ...command,
+  socket.on("remote:command", (command) => {
+    if (!command || typeof command !== "object") return;
+    const { role } = socket.data;
+    let forwarded = null;
+    if (role === "remote") forwarded = { ...command };
+    if (role === "guest") forwarded = guestCommand(socket, command);
+    if (!forwarded) return;
+
+    // The role comes last, so a command can't claim to be from someone else.
+    io.to("booth").emit("player:command", {
+      ...forwarded,
+      role,
       at: Date.now(),
       from: socket.id,
     });
@@ -634,6 +717,7 @@ server.listen(port, "0.0.0.0", () => {
   console.log("Party DJ Booth is running.");
   console.log(`Mac player:  http://localhost:${port}`);
   console.log(`Phone remote: http://${lanAddress}:${port}/?remote=1&session=${sessionCode}`);
+  console.log(`Guest link:   http://${lanAddress}:${port}/?guest=1&session=${guestCode}`);
   console.log(`YouTube search: ${youtubeApiKey ? "on" : "off (add YOUTUBE_API_KEY to .env)"}`);
   console.log("");
   console.log("Keep this server running while the party is active.");

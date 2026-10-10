@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { findQueuedTrack, matchScore, normalizeSpeech, parseVoiceCommand } from "../public/voice.js";
+import { findQueuedTrack, matchScore, normalizeSpeech, parseVoiceCommand, requestKey } from "../public/voice.js";
 
 const cases = [
   ["next", { action: "next" }],
@@ -93,4 +93,14 @@ test("finds the best queued track, preferring the earlier one on a tie", () => {
   assert.equal(findQueuedTrack("alpha", tracks), 0);
   assert.equal(findQueuedTrack("bravo", tracks), -1);
   assert.equal(findQueuedTrack("one more night", tracks), -1);
+});
+
+test("the same song request typed two ways gets one key", () => {
+  const key = requestKey("Blinding Lights - The Weeknd");
+  assert.equal(key, "blinding lights the weeknd");
+  assert.equal(requestKey("can you play blinding lights the weeknd please"), key);
+  assert.equal(requestKey("Please play Blinding Lights, The Weeknd!"), key);
+  assert.equal(requestKey("Raï – Cheb Khaled"), "raï cheb khaled");
+  assert.equal(requestKey("Play"), "play");
+  assert.equal(requestKey("!!!"), "");
 });

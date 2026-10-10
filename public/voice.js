@@ -40,6 +40,15 @@ export function normalizeSpeech(text) {
     .trim();
 }
 
+// A key for spotting the same song request typed two ways: "Blinding Lights - The Weeknd" and
+// "can you play blinding lights the weeknd please" both become "blinding lights the weeknd".
+export function requestKey(text) {
+  return normalizeSpeech(text)
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/^(?:please )?(?:(?:can|could) you )?(?:please )?(?:play|put on) /, "")
+    .trim();
+}
+
 export function parseVoiceCommand(text) {
   const spoken = normalizeSpeech(text);
   if (!spoken) return null;

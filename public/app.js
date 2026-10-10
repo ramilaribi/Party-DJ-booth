@@ -7,14 +7,17 @@ import {
   phaseDifference,
   timeForPhase,
 } from "./mixing.js";
-import { findQueuedTrack, parseVoiceCommand } from "./voice.js";
+import { findQueuedTrack, parseVoiceCommand, requestKey } from "./voice.js";
 
 const params = new URLSearchParams(window.location.search);
-const isRemote = params.has("remote") || params.get("role") === "remote";
+// isRemote is true on any phone, the DJ remote or a guest, because both are "not the booth".
+// Guests can only vote and ask for songs.
+const isGuest = params.has("guest");
+const isRemote = isGuest || params.has("remote") || params.get("role") === "remote";
 const sessionCode = params.get("session") || "";
 const socket = window.io({
   // Sent on every connect and reconnect; the server checks it before accepting the socket.
-  auth: { role: isRemote ? "remote" : "display", session: sessionCode },
+  auth: { role: isGuest ? "guest" : isRemote ? "remote" : "display", session: sessionCode },
 });
 
 const els = {
@@ -78,6 +81,22 @@ const els = {
   soundCheckSummary: document.querySelector("#sound-check-summary"),
   soundCheckList: document.querySelector("#sound-check-list"),
   qrCard: document.querySelector(".qr-card"),
+  qrTabs: document.querySelectorAll("[data-qr]"),
+  qrLabel: document.querySelector("#qr-label"),
+  qrHint: document.querySelector("#qr-hint"),
+  guestQrShow: document.querySelector("#guest-qr-show"),
+  guestQrDialog: document.querySelector("#guest-qr-dialog"),
+  guestQrBig: document.querySelector("#guest-qr-big"),
+  guestQrUrl: document.querySelector("#guest-qr-url"),
+  guestQrClose: document.querySelector("#guest-qr-close"),
+  requestsCount: document.querySelector("#requests-count"),
+  requestsToggle: document.querySelector("#requests-toggle"),
+  requestsList: document.querySelector("#requests-list"),
+  guestRequest: document.querySelector("#guest-request"),
+  guestRequestForm: document.querySelector("#guest-request-form"),
+  guestRequestInput: document.querySelector("#guest-request-input"),
+  guestRequestStatus: document.querySelector("#guest-request-status"),
+  guestQueueHint: document.querySelector("#guest-queue-hint"),
   transitionSelect: document.querySelector("#transition-select"),
   mixNextBtn: document.querySelector("#mix-next-btn"),
   remoteTransition: document.querySelector("#remote-transition"),
@@ -94,6 +113,19 @@ const settingsKey = "party-dj-booth-settings";
 const trackPrefsKey = "party-dj-booth-track-prefs";
 const recentSearchesKey = "party-dj-booth-recent-searches";
 const preflightKey = "party-dj-booth-sound-check";
+const guestVotesKey = "party-dj-booth-guest-votes";
+const qrText = {
+  dj: {
+    label: "Phone Remote",
+    alt: "DJ remote QR code",
+    hint: "Full control of the booth. Keep this one for yourself.",
+  },
+  guest: {
+    label: "Guest Pass",
+    alt: "Guest QR code",
+    hint: "Guests can vote and ask for songs, nothing else. This one is fine to show on screen.",
+  },
+};
 const youtubeStates = { ended: 0, playing: 1, buffering: 3 };
 const searchSources = {
   archive: {
@@ -133,7 +165,11 @@ let crossfaderTimer = 0;
 let manualBusy = false;
 let wakeLock = null;
 let wantsAwake = false;
-const sessionInfo = { youtubeSearch: false, phones: 0, youtubeStarted: false, voiceUsed: false };
+const sessionInfo = { youtubeSearch: false, phones: 0, guests: 0, youtubeStarted: false, voiceUsed: false };
+// The two QR codes from /api/session, which one the card shows, and whether someone picked it.
+const qrCodes = { dj: null, guest: null };
+let qrTab = "dj";
+let qrTabPicked = false;
 let analysisQueue = Promise.resolve();
 const analysisJobs = new Map();
 const deckStrips = [];
@@ -147,6 +183,8 @@ const settings = readJson(settingsKey, {
   autoDj: true,
 });
 const trackPrefs = readJson(trackPrefsKey, {});
+// On a guest phone: the songs it voted for at this party.
+const guestVotes = new Set(isGuest ? readGuestVotes() : []);
 
 const booth = {
   tracks: [],
@@ -167,6 +205,9 @@ const booth = {
   history: [],
   // Track ids someone asked to play next, oldest request first.
   upNext: [],
+  // Guests' song requests, newest first. Only the booth sees them.
+  requests: [],
+  guestRequests: settings.guestRequests ?? true,
 };
 
 // Two decks, A and B. Either can hold a file or a YouTube video, so every transition overlaps
@@ -176,7 +217,7 @@ let activeDeck = decks[0];
 
 function boot() {
   els.shell.dataset.role = isRemote ? "remote" : "display";
-  els.screenTitle.textContent = isRemote ? "Phone Remote" : "Mac Booth";
+  els.screenTitle.textContent = isGuest ? "Party Guest" : isRemote ? "Phone Remote" : "Mac Booth";
   els.displayView.hidden = isRemote;
   els.remoteView.hidden = !isRemote;
   els.queuePanel.hidden = isRemote;
@@ -186,12 +227,15 @@ function boot() {
   bindSearchControls();
   bindVoiceControls();
 
-  if (isRemote) {
+  if (isGuest) {
+    bindGuestControls();
+  } else if (isRemote) {
     bindRemoteControls();
   } else {
     bindDisplayControls();
     buildMixer();
     bindSoundCheck();
+    bindGuestTools();
     fetchSession();
     loadDownloadedTracks();
     applySettingsToInputs();
@@ -203,7 +247,7 @@ function boot() {
 
 function bindSocket() {
   socket.on("connect", () => {
-    els.connectionPill.textContent = isRemote ? "Remote linked" : "Booth live";
+    els.connectionPill.textContent = isGuest ? "Guest linked" : isRemote ? "Remote linked" : "Booth live";
     renderSoundCheck();
   });
 
@@ -213,7 +257,9 @@ function bindSocket() {
 
     if (isRemote) {
       els.remoteTrackTitle.textContent = "Scan the QR code again";
-      els.remoteTrackMeta.textContent = "This remote link is missing or out of date. Scan the QR code on the Mac booth to reconnect.";
+      els.remoteTrackMeta.textContent = isGuest
+        ? "This guest link is missing or out of date. Scan the guest QR code at the booth to join again."
+        : "This remote link is missing or out of date. Scan the QR code on the Mac booth to reconnect.";
     } else {
       const port = window.location.port ? `:${window.location.port}` : "";
       els.trackTitle.textContent = "Open the booth on the Mac";
@@ -227,8 +273,24 @@ function bindSocket() {
   });
 
   socket.on("presence", (presence) => {
-    els.remoteCount.textContent = `${presence.remotes || 0} phones`;
     sessionInfo.phones = presence.remotes || 0;
+    sessionInfo.guests = presence.guests || 0;
+
+    if (isRemote) {
+      remoteState = {
+        ...remoteState,
+        connectedDisplays: presence.displays || 0,
+        connectedRemotes: sessionInfo.phones,
+        connectedGuests: sessionInfo.guests,
+      };
+      renderRemote();
+      return;
+    }
+
+    els.remoteCount.textContent = sessionInfo.guests
+      ? `${countLabel(sessionInfo.phones, "phone")} · ${countLabel(sessionInfo.guests, "guest")}`
+      : countLabel(sessionInfo.phones, "phone");
+    switchToGuestQr();
     renderSoundCheck();
   });
 
@@ -252,8 +314,11 @@ async function fetchSession() {
   try {
     const res = await fetch("/api/session");
     const session = await res.json();
-    els.qrCode.src = session.qrDataUrl;
-    els.remoteUrl.textContent = session.localRemoteUrl;
+    qrCodes.dj = { image: session.qrDataUrl, url: session.localRemoteUrl };
+    qrCodes.guest = { image: session.guestQrDataUrl, url: session.guestUrl };
+    els.guestQrBig.src = session.guestQrDataUrl;
+    els.guestQrUrl.textContent = session.guestUrl;
+    showQrTab(qrTab);
     sessionInfo.youtubeSearch = Boolean(session.youtubeSearch);
     renderSoundCheck();
   } catch {
@@ -487,6 +552,13 @@ function sendCommand(command) {
 function handleRemoteCommand(command) {
   if (!command || !command.type) return;
 
+  // The server forwards only votes and requests from guests. Check again here all the same.
+  if (command.role === "guest") {
+    if (command.type === "vote" || command.type === "unvote") voteForTrack(command);
+    if (command.type === "request") addGuestRequest(command);
+    return;
+  }
+
   if (command.type === "playPause") togglePlay();
   if (command.type === "next") nextTrack(true);
   if (command.type === "previous") previousTrack();
@@ -506,15 +578,7 @@ function handleRemoteCommand(command) {
     if (index >= 0) togglePlayNext(index);
   }
 
-  if (command.type === "vote") {
-    const track = booth.tracks.find((item) => item.id === command.trackId);
-    if (track) {
-      track.votes += 1;
-      booth.message = `${track.title} got a crowd vote`;
-      renderDisplay();
-      syncFromDisplay(true);
-    }
-  }
+  if (command.type === "vote") voteForTrack(command);
 
   if (command.type === "setVolume") setVolume(command.value);
   if (command.type === "setEnergy") setEnergy(command.value);
@@ -2226,6 +2290,220 @@ function renderPlatter(deck, parts) {
 
 // --- Sound check ------------------------------------------------------------------------------
 
+// --- Guests ------------------------------------------------------------------------------------
+
+function countLabel(count, word) {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+function showQrTab(name) {
+  qrTab = name;
+  els.qrTabs.forEach((tab) => {
+    tab.classList.toggle("is-selected", tab.dataset.qr === name);
+    tab.setAttribute("aria-pressed", String(tab.dataset.qr === name));
+  });
+
+  const code = qrCodes[name];
+  if (code) {
+    els.qrCode.src = code.image;
+    els.remoteUrl.textContent = code.url;
+  }
+  els.qrCode.alt = qrText[name].alt;
+  els.qrLabel.textContent = qrText[name].label;
+  els.qrHint.textContent = qrText[name].hint;
+  els.guestQrShow.hidden = name !== "guest";
+}
+
+// The DJ code gives full control, and the booth screen may be where guests can see it. Once the
+// DJ's phone is paired, show the guest code instead, unless someone picked a tab themselves.
+function switchToGuestQr() {
+  if (sessionInfo.phones && !qrTabPicked && qrTab === "dj") showQrTab("guest");
+}
+
+function bindGuestTools() {
+  els.qrTabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      qrTabPicked = true;
+      showQrTab(tab.dataset.qr);
+    });
+  });
+  els.guestQrShow.addEventListener("click", () => els.guestQrDialog.showModal());
+  els.guestQrClose.addEventListener("click", () => els.guestQrDialog.close());
+
+  els.requestsToggle.checked = booth.guestRequests;
+  els.requestsToggle.addEventListener("change", () => {
+    booth.guestRequests = els.requestsToggle.checked;
+    saveSettings();
+    renderRequests();
+    syncFromDisplay(true);
+  });
+  renderRequests();
+}
+
+// A DJ vote always counts. A guest phone gets one vote per song, and voting again takes it back.
+function voteForTrack({ type, trackId, role, voter }) {
+  const track = booth.tracks.find((item) => item.id === trackId);
+  if (!track) return;
+
+  if (role === "guest") {
+    track.voters ??= new Set();
+    if (track.voters.has(voter) === (type === "vote")) return;
+    if (type === "vote") track.voters.add(voter);
+    else track.voters.delete(voter);
+  }
+
+  track.votes = Math.max(0, track.votes + (type === "vote" ? 1 : -1));
+  if (type === "vote") booth.message = `${track.title} got a crowd vote`;
+  renderDisplay();
+  syncFromDisplay(true);
+}
+
+function addGuestRequest({ text, voter }) {
+  if (!booth.guestRequests) return;
+  const key = requestKey(text);
+  if (!key) return;
+
+  // The same song asked for twice becomes one request that shows how many guests want it.
+  const existing = booth.requests.find((request) => request.key === key);
+  if (existing) {
+    existing.voters.add(voter);
+    existing.at = Date.now();
+  } else {
+    booth.requests.unshift({ id: safeId(), key, text, voters: new Set([voter]), at: Date.now() });
+    booth.requests.length = Math.min(booth.requests.length, 30);
+  }
+
+  // Guests' own words stay in the booth's request list. The status line everyone sees only counts them.
+  booth.message = `New song request (${booth.requests.length} waiting)`;
+  renderDisplay();
+  syncFromDisplay(true);
+}
+
+function removeRequest(id) {
+  booth.requests = booth.requests.filter((request) => request.id !== id);
+  renderRequests();
+}
+
+// Search for a request on the booth: on YouTube when it's set up, since it finds almost anything.
+function searchForRequest(request) {
+  const section = els.displayView.querySelector(".music-search");
+  const source = sessionInfo.youtubeSearch ? "youtube" : "archive";
+  section.querySelector(`.source-tab[data-source="${source}"]`).click();
+  section.querySelector(".search-input").value = request.text;
+  section.querySelector(".search-form").requestSubmit();
+  section.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function renderRequests() {
+  if (isRemote) return;
+  els.requestsCount.textContent = `${booth.requests.length} waiting`;
+
+  if (!booth.guestRequests) {
+    els.requestsList.innerHTML = `<div class="empty-state">Requests are off. Guests can still vote.</div>`;
+    return;
+  }
+  if (!booth.requests.length) {
+    els.requestsList.innerHTML = `<div class="empty-state">No requests yet. Guests send them after scanning the Guests QR code.</div>`;
+    return;
+  }
+
+  // Most-wanted first, then newest.
+  const requests = [...booth.requests].sort((a, b) => b.voters.size - a.voters.size || b.at - a.at);
+  els.requestsList.replaceChildren(...requests.map((request) => {
+    const row = document.createElement("article");
+    row.className = "request-row";
+
+    const info = document.createElement("div");
+    const title = document.createElement("p");
+    title.className = "queue-title";
+    title.textContent = request.text;
+    const meta = document.createElement("p");
+    meta.className = "queue-meta";
+    const index = findQueuedTrack(request.text, booth.tracks);
+    const match = booth.tracks[index];
+    const asked = request.voters.size === 1 ? "1 guest asked" : `${request.voters.size} guests asked`;
+    meta.textContent = match ? `${asked} - in your queue: ${match.title}` : `${asked} - ${timeAgo(request.at)}`;
+    info.append(title, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "queue-actions";
+    if (match) {
+      actions.append(actionButton("Play next", () => {
+        booth.message = playNextMessage(match, addToUpNext(index));
+        removeRequest(request.id);
+        renderDisplay();
+        syncFromDisplay(true);
+      }));
+    }
+    actions.append(
+      actionButton("Search", () => searchForRequest(request)),
+      actionButton("Done", () => removeRequest(request.id)),
+    );
+
+    row.append(info, actions);
+    return row;
+  }));
+}
+
+function timeAgo(at) {
+  const minutes = Math.round((Date.now() - at) / 60000);
+  return minutes < 1 ? "just now" : `${minutes} min ago`;
+}
+
+function bindGuestControls() {
+  els.remoteView.querySelectorAll("[data-dj-only]").forEach((element) => {
+    element.hidden = true;
+  });
+  els.guestQueueHint.hidden = false;
+
+  els.guestRequestForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const text = els.guestRequestInput.value.trim();
+    if (text.length < 2) {
+      els.guestRequestStatus.textContent = "Type a song name first.";
+      return;
+    }
+    sendCommand({ type: "request", text });
+    els.guestRequestInput.value = "";
+    els.guestRequestStatus.textContent = `Sent “${text}” to the DJ.`;
+  });
+
+  socket.on("guest:notice", (notice = {}) => {
+    const target = notice.about === "request" ? els.guestRequestStatus : els.guestQueueHint;
+    target.textContent = String(notice.text || "");
+  });
+}
+
+function guestVoteButton(track) {
+  const voted = guestVotes.has(track.id);
+  const button = actionButton(voted ? "Voted" : "Vote", () => {
+    const type = guestVotes.has(track.id) ? "unvote" : "vote";
+    sendCommand({ type, trackId: track.id });
+    if (type === "vote") guestVotes.add(track.id);
+    else guestVotes.delete(track.id);
+    saveGuestVotes();
+    renderRemote();
+  });
+  button.classList.toggle("is-selected", voted);
+  button.setAttribute("aria-pressed", String(voted));
+  return button;
+}
+
+// A guest phone remembers its votes for this party, so the buttons survive a reload. The guest
+// code changes when the server restarts, which starts a new list.
+function readGuestVotes() {
+  const saved = readJson(guestVotesKey, {});
+  return saved.party === sessionCode && Array.isArray(saved.ids) ? saved.ids : [];
+}
+
+function saveGuestVotes() {
+  try {
+    writeJson(guestVotesKey, { party: sessionCode, ids: [...guestVotes].slice(-300) });
+  } catch {
+    // Private windows can refuse storage; the buttons just won't survive a reload.
+  }
+}
+
 function bindSoundCheck() {
   els.soundCheckBtn.addEventListener("click", () => {
     els.soundCheckDialog.showModal();
@@ -2275,6 +2553,7 @@ function confirmedToday(name) {
 
 function showQrCode() {
   els.soundCheckDialog.close();
+  showQrTab("dj");
   els.qrCard.scrollIntoView({ behavior: "smooth", block: "center" });
   els.qrCard.classList.add("is-highlighted");
   window.setTimeout(() => els.qrCard.classList.remove("is-highlighted"), 2500);
@@ -2608,6 +2887,7 @@ function saveSettings() {
     mixMode: booth.mixMode,
     beatMatch: booth.beatMatch,
     transition: booth.transition,
+    guestRequests: booth.guestRequests,
   });
 }
 
@@ -2652,6 +2932,7 @@ function renderDisplay() {
   renderQueue();
   renderMixer();
   renderSoundCheck();
+  renderRequests();
 
   // Analyse what's playing and what's next ahead of time, so the next mix can be beat-matched.
   ensureBpm(currentTrack);
@@ -2689,7 +2970,7 @@ function renderQueue() {
     const meta = document.createElement("p");
     meta.className = "queue-meta";
     const bpm = track.bpm ? ` - ${track.bpm} BPM` : "";
-    meta.textContent = `${track.artist} - ${formatTime(track.duration)}${sourceLabel(track)}${bpm} - energy ${track.energy} - ${track.votes} votes`;
+    meta.textContent = `${track.artist} - ${formatTime(track.duration)}${sourceLabel(track)}${bpm} - energy ${track.energy} - ${countLabel(track.votes, "vote")}`;
     info.append(title, meta);
     const upNext = upNextPosition(track);
     if (upNext) {
@@ -2896,7 +3177,11 @@ function renderRemote() {
   const duration = remoteState.duration || current?.duration || 0;
   const progress = duration ? clamp((remoteState.currentTime / duration) * 100, 0, 100) : 0;
 
-  els.remoteCount.textContent = `${remoteState.connectedRemotes || 0} phones`;
+  els.remoteCount.textContent = isGuest
+    ? countLabel(remoteState.connectedGuests || 0, "guest")
+    : countLabel(remoteState.connectedRemotes || 0, "phone");
+  // Requests need the booth open to land, and the DJ can turn them off.
+  if (isGuest) els.guestRequest.hidden = !remoteState.connectedDisplays || remoteState.guestRequests === false;
   els.remoteTrackTitle.textContent = current ? current.title : "Waiting for the Mac";
   els.remoteTrackMeta.textContent = current
     ? `${current.artist} - ${remoteState.message || "Booth is linked"}`
@@ -2942,7 +3227,7 @@ function renderRemote() {
     title.textContent = track.title;
     const meta = document.createElement("p");
     meta.className = "queue-meta";
-    meta.textContent = `${track.artist} - ${formatTime(track.duration)}${sourceLabel(track)} - ${track.votes || 0} votes`;
+    meta.textContent = `${track.artist} - ${formatTime(track.duration)}${sourceLabel(track)} - ${countLabel(track.votes || 0, "vote")}`;
     info.append(title, meta);
 
     const actions = document.createElement("div");
@@ -2951,6 +3236,12 @@ function renderRemote() {
       row.classList.add("is-up-next");
       title.prepend(upNextBadge(track.upNext));
     }
+    if (isGuest) {
+      actions.append(guestVoteButton(track));
+      row.append(indexEl, info, actions);
+      return row;
+    }
+
     const playNext = remoteAction(track.upNext ? "Cancel next" : "Play next", { type: "playNext", trackId: track.id });
     if (track.upNext) playNext.classList.add("is-selected");
     actions.append(
@@ -2993,6 +3284,7 @@ function syncFromDisplay(force = false) {
     hypeUntil: booth.hypeUntil,
     volume: booth.volume,
     transition: booth.transition,
+    guestRequests: booth.guestRequests,
     message: booth.message,
   });
 }
