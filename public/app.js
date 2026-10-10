@@ -72,6 +72,12 @@ const els = {
   youtubeStage: document.querySelector("#youtube-stage"),
   youtubeSlotA: document.querySelector("#youtube-slot-a"),
   youtubeSlotB: document.querySelector("#youtube-slot-b"),
+  soundCheckBtn: document.querySelector("#sound-check-btn"),
+  soundCheckDialog: document.querySelector("#sound-check"),
+  soundCheckClose: document.querySelector("#sound-check-close"),
+  soundCheckSummary: document.querySelector("#sound-check-summary"),
+  soundCheckList: document.querySelector("#sound-check-list"),
+  qrCard: document.querySelector(".qr-card"),
   transitionSelect: document.querySelector("#transition-select"),
   mixNextBtn: document.querySelector("#mix-next-btn"),
   remoteTransition: document.querySelector("#remote-transition"),
@@ -87,6 +93,7 @@ const els = {
 const settingsKey = "party-dj-booth-settings";
 const trackPrefsKey = "party-dj-booth-track-prefs";
 const recentSearchesKey = "party-dj-booth-recent-searches";
+const preflightKey = "party-dj-booth-sound-check";
 const youtubeStates = { ended: 0, playing: 1, buffering: 3 };
 const searchSources = {
   archive: {
@@ -124,6 +131,9 @@ let isTransitioning = false;
 let pendingCue = null;
 let crossfaderTimer = 0;
 let manualBusy = false;
+let wakeLock = null;
+let wantsAwake = false;
+const sessionInfo = { youtubeSearch: false, phones: 0, youtubeStarted: false, voiceUsed: false };
 let analysisQueue = Promise.resolve();
 const analysisJobs = new Map();
 const deckStrips = [];
@@ -155,6 +165,8 @@ const booth = {
   hypeUntil: 0,
   message: "Waiting for music on the Mac",
   history: [],
+  // Track ids someone asked to play next, oldest request first.
+  upNext: [],
 };
 
 // Two decks, A and B. Either can hold a file or a YouTube video, so every transition overlaps
@@ -179,6 +191,7 @@ function boot() {
   } else {
     bindDisplayControls();
     buildMixer();
+    bindSoundCheck();
     fetchSession();
     loadDownloadedTracks();
     applySettingsToInputs();
@@ -191,6 +204,7 @@ function boot() {
 function bindSocket() {
   socket.on("connect", () => {
     els.connectionPill.textContent = isRemote ? "Remote linked" : "Booth live";
+    renderSoundCheck();
   });
 
   socket.on("connect_error", (error) => {
@@ -209,10 +223,13 @@ function bindSocket() {
 
   socket.on("disconnect", () => {
     els.connectionPill.textContent = "Disconnected";
+    renderSoundCheck();
   });
 
   socket.on("presence", (presence) => {
     els.remoteCount.textContent = `${presence.remotes || 0} phones`;
+    sessionInfo.phones = presence.remotes || 0;
+    renderSoundCheck();
   });
 
   socket.on("state", (state) => {
@@ -237,6 +254,8 @@ async function fetchSession() {
     const session = await res.json();
     els.qrCode.src = session.qrDataUrl;
     els.remoteUrl.textContent = session.localRemoteUrl;
+    sessionInfo.youtubeSearch = Boolean(session.youtubeSearch);
+    renderSoundCheck();
   } catch {
     els.remoteUrl.textContent = "Could not create phone link. Restart the server.";
   }
@@ -473,13 +492,18 @@ function handleRemoteCommand(command) {
   if (command.type === "previous") previousTrack();
   if (command.type === "hype") hypeMoment();
 
-  if (command.type === "addYouTube") addYouTubeTrack(command.video, Boolean(command.playNow));
+  if (command.type === "addYouTube") addYouTubeTrack(command.video, Boolean(command.playNow), Boolean(command.playNext));
   if (command.type === "addYouTubeList") addYouTubeList(command.videos);
   if (command.type === "voice") runVoiceCommand(command.text);
 
   if (command.type === "jumpTo") {
     const index = booth.tracks.findIndex((track) => track.id === command.trackId);
-    if (index >= 0) cueTrack(index, booth.playing);
+    if (index >= 0) cueTrack(index, true);
+  }
+
+  if (command.type === "playNext") {
+    const index = booth.tracks.findIndex((track) => track.id === command.trackId);
+    if (index >= 0) togglePlayNext(index);
   }
 
   if (command.type === "vote") {
@@ -616,6 +640,7 @@ async function runVoiceCommand(text) {
   const spoken = String(text || "").slice(0, 200);
   const command = parseVoiceCommand(spoken);
   let result;
+  if (command) sessionInfo.voiceUsed = true;
 
   if (!command) {
     result = `didn't catch a command in “${spoken}”`;
@@ -667,7 +692,8 @@ async function runVoiceCommand(text) {
       result = "next song";
     }
   } else {
-    result = await requestSong(command.query, command.action === "playSong");
+    const mode = { playSong: "now", playNext: "next", queueSong: "queue" }[command.action];
+    result = await requestSong(command.query, mode);
   }
 
   booth.message = `Voice: ${result}`;
@@ -677,13 +703,15 @@ async function runVoiceCommand(text) {
 }
 
 // A song request plays from the queue when it's there, and otherwise from YouTube's top result.
-async function requestSong(query, playNow) {
+// mode is "now" (play it), "next" (Up next), or "queue" (just add it).
+async function requestSong(query, mode) {
   const playable = booth.tracks.map((track) => (track.unplayable ? {} : track));
   const index = findQueuedTrack(query, playable);
 
   if (index >= 0) {
     const track = booth.tracks[index];
-    if (!playNow) return `${track.title} is already in the queue`;
+    if (mode === "next") return playNextMessage(track, addToUpNext(index));
+    if (mode !== "now") return `${track.title} is already in the queue`;
     cueTrack(index, true);
     return `playing ${track.title}`;
   }
@@ -696,8 +724,9 @@ async function requestSong(query, playNow) {
     const video = payload.results[0];
     if (!video) return `couldn't find “${query}” in the queue or on YouTube`;
 
-    addYouTubeTrack(video, playNow);
-    return playNow ? `playing ${video.title} from YouTube` : `added ${video.title} from YouTube`;
+    addYouTubeTrack(video, mode === "now", mode === "next");
+    if (mode === "now") return `playing ${video.title} from YouTube`;
+    return mode === "next" ? `${video.title} from YouTube plays next` : `added ${video.title} from YouTube`;
   } catch {
     return `couldn't search YouTube for “${query}”. Check the internet connection.`;
   }
@@ -791,7 +820,7 @@ function addDownloadedTrack(downloadedTrack, announce) {
   syncFromDisplay(true);
 }
 
-function addYouTubeTrack(video, playNow) {
+function addYouTubeTrack(video, playNow, playNext = false) {
   const index = queueYouTubeVideo(video);
   if (index < 0) return;
 
@@ -801,6 +830,8 @@ function addYouTubeTrack(video, playNow) {
     cueTrack(index, true);
   } else if (booth.currentIndex === -1) {
     loadTrack(index, false, false);
+  } else if (playNext) {
+    booth.message = playNextMessage(booth.tracks[index], addToUpNext(index));
   }
 
   renderDisplay();
@@ -1086,6 +1117,41 @@ async function loadTrack(index, shouldPlay, useFade) {
 
 // Cue and Play now are what someone asked for, so a running crossfade delays them instead of
 // dropping them. Automatic transitions still just skip while a crossfade runs.
+// --- Play next ---------------------------------------------------------------------------------
+
+// Where a track sits in the Up next list (1 = plays next), or 0 when it isn't on it.
+function upNextPosition(track) {
+  return booth.upNext.indexOf(track.id) + 1;
+}
+
+function addToUpNext(index) {
+  const track = booth.tracks[index];
+  if (!track) return 0;
+  if (!booth.upNext.includes(track.id) && index !== booth.currentIndex) booth.upNext.push(track.id);
+  return upNextPosition(track);
+}
+
+// The queue's Play next button: add the song to Up next, or take it off again.
+function togglePlayNext(index) {
+  const track = booth.tracks[index];
+  if (!track) return;
+
+  if (booth.upNext.includes(track.id)) {
+    booth.upNext = booth.upNext.filter((id) => id !== track.id);
+    booth.message = `${track.title} is off the Up next list`;
+  } else {
+    booth.message = playNextMessage(track, addToUpNext(index));
+  }
+
+  renderDisplay();
+  syncFromDisplay(true);
+}
+
+function playNextMessage(track, position) {
+  if (!position) return `${track.title} is already playing`;
+  return position === 1 ? `${track.title} plays next` : `${track.title} is up next (#${position})`;
+}
+
 function cueTrack(index, shouldPlay) {
   if (booth.mixMode === "manual") {
     manualPlay(index);
@@ -1377,6 +1443,7 @@ function createDeck(label, el, slot) {
   function handleState(event) {
     if (event.data === youtubeStates.playing) {
       needsStart = false;
+      sessionInfo.youtubeStarted = true;
       settleStart(null);
     }
     if (event.data === youtubeStates.ended && deck.kind === "youtube") {
@@ -2157,6 +2224,210 @@ function renderPlatter(deck, parts) {
   platterLabel.classList.toggle("has-art", Boolean(videoId));
 }
 
+// --- Sound check ------------------------------------------------------------------------------
+
+function bindSoundCheck() {
+  els.soundCheckBtn.addEventListener("click", () => {
+    els.soundCheckDialog.showModal();
+    renderSoundCheck();
+  });
+  els.soundCheckClose.addEventListener("click", () => els.soundCheckDialog.close());
+
+  // The browser drops a wake lock whenever the tab is hidden, so take it again on return.
+  document.addEventListener("visibilitychange", () => {
+    if (wantsAwake && !wakeLock && document.visibilityState === "visible") keepAwake();
+  });
+
+  renderSoundCheck();
+}
+
+async function keepAwake() {
+  wantsAwake = true;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => {
+      wakeLock = null;
+      renderSoundCheck();
+    });
+  } catch {
+    wakeLock = null;
+  }
+  renderSoundCheck();
+}
+
+// Manual confirmations ("sounds good", "notifications off") count for the day they were given.
+function confirmCheck(name) {
+  const today = new Date().toLocaleDateString("en-CA");
+  const saved = readJson(preflightKey, {});
+  const confirmed = saved.date === today ? saved : { date: today };
+  confirmed[name] = true;
+  try {
+    writeJson(preflightKey, confirmed);
+  } catch {
+    // Private windows can refuse storage; the check just won't be remembered.
+  }
+}
+
+function confirmedToday(name) {
+  const saved = readJson(preflightKey, {});
+  return saved.date === new Date().toLocaleDateString("en-CA") && Boolean(saved[name]);
+}
+
+function showQrCode() {
+  els.soundCheckDialog.close();
+  els.qrCard.scrollIntoView({ behavior: "smooth", block: "center" });
+  els.qrCard.classList.add("is-highlighted");
+  window.setTimeout(() => els.qrCard.classList.remove("is-highlighted"), 2500);
+}
+
+// Each check says whether it's done ("ok"), needs doing ("todo"), looks wrong ("warn"), or doesn't
+// apply ("skip"), and offers one-click actions where the booth can help.
+function soundChecks() {
+  const songs = booth.tracks.length;
+  const lowVolume = booth.volume < 30;
+  const youtubeTrack = booth.tracks.find((track) => track.kind === "youtube" && !track.unplayable);
+  const voiceSection = els.displayView.querySelector(".voice-control");
+  const canWake = "wakeLock" in navigator;
+
+  return [
+    {
+      title: "Booth is open on the Mac",
+      state: socket.connected ? "ok" : "todo",
+      detail: socket.connected
+        ? "Connected to the server at localhost."
+        : "Not connected. Check the server is still running in Terminal, then reload this page.",
+    },
+    {
+      title: "Audio is unlocked",
+      state: audioContext?.state === "running" ? "ok" : "todo",
+      detail: audioContext?.state === "running"
+        ? "The browser will play sound, even when the phone starts it."
+        : "Browsers need one click on the Mac before a page can play sound.",
+      actions: audioContext?.state === "running" ? [] : [{ label: "Unlock audio", run: setupAudio }],
+    },
+    {
+      title: "Music is loaded",
+      state: songs ? "ok" : "todo",
+      detail: songs ? `${songs} songs in the queue.` : "Choose a music folder, drop in files, or search for music.",
+      actions: songs ? [] : [{ label: "Choose a folder", run: () => els.folderInput.click() }],
+    },
+    {
+      title: "Volume is up",
+      state: lowVolume ? "warn" : "ok",
+      detail: lowVolume
+        ? `The booth's master volume is only ${booth.volume}%, so guests won't hear much.`
+        : `Master volume is ${booth.volume}%. Set the Mac's own volume high too.`,
+      actions: lowVolume ? [{ label: "Set to 80%", run: () => setVolume(80) }] : [],
+    },
+    {
+      title: "Phone remote is paired",
+      state: sessionInfo.phones ? "ok" : "todo",
+      detail: sessionInfo.phones
+        ? `${sessionInfo.phones} phone${sessionInfo.phones === 1 ? "" : "s"} connected.`
+        : "Scan the QR code with your phone, on the same Wi-Fi as the Mac.",
+      actions: sessionInfo.phones ? [] : [{ label: "Show the QR code", run: showQrCode }],
+    },
+    {
+      title: "Transitions sound right",
+      state: confirmedToday("crossfade") ? "ok" : "todo",
+      detail: "While music plays, press Mix next and listen to the change. Then confirm it sounds good.",
+      actions: confirmedToday("crossfade")
+        ? []
+        : [{ label: "Mix next", run: () => nextTrack(true) }, { label: "Sounds good", run: () => confirmCheck("crossfade") }],
+    },
+    {
+      title: "YouTube search is set up",
+      state: sessionInfo.youtubeSearch ? "ok" : "skip",
+      detail: sessionInfo.youtubeSearch
+        ? "YouTube search is on."
+        : "Optional. Add YOUTUBE_API_KEY to the .env file and restart the server to search YouTube.",
+    },
+    {
+      title: "YouTube plays with sound",
+      state: !sessionInfo.youtubeSearch ? "skip" : sessionInfo.youtubeStarted ? "ok" : "todo",
+      detail: sessionInfo.youtubeStarted
+        ? "A YouTube song has started on this booth."
+        : youtubeTrack
+          ? "Play one YouTube song so you know it starts with sound."
+          : "Add a YouTube song from search and play it once.",
+      actions: sessionInfo.youtubeSearch && !sessionInfo.youtubeStarted && youtubeTrack
+        ? [{ label: "Play one now", run: () => cueTrack(booth.tracks.indexOf(youtubeTrack), true) }]
+        : [],
+    },
+    {
+      title: "Voice commands work",
+      state: sessionInfo.voiceUsed ? "ok" : "todo",
+      detail: sessionInfo.voiceUsed
+        ? "A voice command ran on this booth."
+        : canListen()
+          ? "Press Talk (or V) and say “louder”, or type it in the Voice box."
+          : "Type “louder” in the Voice box. For Talk, open the booth in Chrome or Safari.",
+      actions: canListen() && !sessionInfo.voiceUsed ? [{ label: "Talk", run: () => toggleListening(voiceSection) }] : [],
+    },
+    {
+      title: "Mac stays awake",
+      state: wakeLock ? "ok" : "todo",
+      detail: wakeLock
+        ? "The screen won't sleep while this page is open. Keep the charger plugged in."
+        : canWake
+          ? "Keep the screen awake while the booth runs, and plug in the charger."
+          : "This browser can't keep the screen awake. Turn sleep off in System Settings > Lock Screen.",
+      actions: wakeLock || !canWake ? [] : [{ label: "Keep awake", run: keepAwake }],
+    },
+    {
+      title: "Notifications are off",
+      state: confirmedToday("notifications") ? "ok" : "todo",
+      detail: "Turn on Do Not Disturb (Control Center > Focus), so pop-ups and alert sounds don't interrupt the music.",
+      actions: confirmedToday("notifications") ? [] : [{ label: "Done", run: () => confirmCheck("notifications") }],
+    },
+  ];
+}
+
+function renderSoundCheck() {
+  if (isRemote || !els.soundCheckBtn) return;
+
+  const checks = soundChecks();
+  const counted = checks.filter((check) => check.state !== "skip");
+  const ready = counted.filter((check) => check.state === "ok").length;
+  const allReady = ready === counted.length;
+  els.soundCheckBtn.textContent = allReady ? "Sound check: all set" : `Sound check · ${counted.length - ready} to do`;
+  els.soundCheckBtn.classList.toggle("is-ready", allReady);
+  if (!els.soundCheckDialog.open) return;
+
+  els.soundCheckSummary.textContent = allReady ? "All set. Enjoy the party!" : `${ready} of ${counted.length} ready.`;
+  const marks = { ok: "✓", todo: "•", warn: "!", skip: "–" };
+  const labels = { ok: "Done", todo: "To do", warn: "Check this", skip: "Not needed" };
+
+  els.soundCheckList.replaceChildren(...checks.map((check) => {
+    const row = document.createElement("li");
+    row.className = `sound-check-row is-${check.state}`;
+
+    const mark = document.createElement("span");
+    mark.className = "sound-check-mark";
+    mark.textContent = marks[check.state];
+    mark.setAttribute("aria-label", labels[check.state]);
+
+    const text = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = check.title;
+    const detail = document.createElement("p");
+    detail.textContent = check.detail;
+    text.append(title, detail);
+
+    const actions = document.createElement("div");
+    actions.className = "sound-check-actions";
+    (check.actions || []).forEach(({ label, run }) => {
+      actions.append(actionButton(label, async () => {
+        await run();
+        renderSoundCheck();
+      }));
+    });
+
+    row.append(mark, text, actions);
+    return row;
+  }));
+}
+
 function bpmText(deck) {
   const track = deck.track;
   if (!track) return "BPM —";
@@ -2208,6 +2479,8 @@ function loadYouTubeApi() {
 }
 
 function rememberPlay(track) {
+  // Once a requested song starts, it leaves the Up next list.
+  booth.upNext = booth.upNext.filter((id) => id !== track.id);
   if (booth.history.at(-1) === track.id) return false;
   booth.history.push(track.id);
   track.plays += 1;
@@ -2247,6 +2520,12 @@ function previousTrack() {
 }
 
 function chooseNextIndex() {
+  // Songs someone asked to play next come first, in the order they were asked for.
+  for (const id of booth.upNext) {
+    const index = booth.tracks.findIndex((track) => track.id === id);
+    if (index >= 0 && index !== booth.currentIndex && !booth.tracks[index].unplayable) return index;
+  }
+
   const count = booth.tracks.length;
   // In list order, skipping videos YouTube refused to play; -1 when nothing is playable.
   let following = -1;
@@ -2372,6 +2651,7 @@ function renderDisplay() {
   renderPlaybackOnly();
   renderQueue();
   renderMixer();
+  renderSoundCheck();
 
   // Analyse what's playing and what's next ahead of time, so the next mix can be beat-matched.
   ensureBpm(currentTrack);
@@ -2411,16 +2691,24 @@ function renderQueue() {
     const bpm = track.bpm ? ` - ${track.bpm} BPM` : "";
     meta.textContent = `${track.artist} - ${formatTime(track.duration)}${sourceLabel(track)}${bpm} - energy ${track.energy} - ${track.votes} votes`;
     info.append(title, meta);
+    const upNext = upNextPosition(track);
+    if (upNext) {
+      row.classList.add("is-up-next");
+      title.prepend(upNextBadge(upNext));
+    }
 
     const actions = document.createElement("div");
     actions.className = "queue-actions";
-    const cue = actionButton("Cue", () => cueTrack(index, booth.playing));
+    const playNow = actionButton("Play now", () => cueTrack(index, true));
+    const position = upNextPosition(track);
+    const playNext = actionButton(position ? "Cancel next" : "Play next", () => togglePlayNext(index));
+    if (position) playNext.classList.add("is-selected");
     const vote = actionButton("Vote", () => {
       track.votes += 1;
       renderDisplay();
       syncFromDisplay(true);
     });
-    actions.append(cue, vote, tagButton("Warm", track, 28), tagButton("Groove", track, 55), tagButton("Peak", track, 86));
+    actions.append(playNow, playNext, vote, tagButton("Warm", track, 28), tagButton("Groove", track, 55), tagButton("Peak", track, 86));
     if (booth.mixMode === "manual" && track.kind === "audio") {
       actions.append(
         actionButton("A", () => loadIntoDeck(decks[0], index)),
@@ -2516,9 +2804,13 @@ function renderYouTubeResults(section, results) {
     // Play and queue only: YouTube videos are never downloaded.
     const actions = document.createElement("div");
     actions.className = "search-result-actions";
-    const playNow = actionButton("Play now", () => queueYouTube(section, video, true));
+    const playNow = actionButton("Play now", () => queueYouTube(section, video, "now"));
+    const playNext = actionButton("Play next", () => {
+      queueYouTube(section, video, "next");
+      playNext.textContent = "Up next";
+    });
     const add = actionButton("Add to queue", () => {
-      queueYouTube(section, video, false);
+      queueYouTube(section, video, "queue");
       add.textContent = "Added";
     });
 
@@ -2529,24 +2821,27 @@ function renderYouTubeResults(section, results) {
     source.rel = "noreferrer";
     source.textContent = "YouTube";
 
-    actions.append(playNow, add, source);
+    actions.append(playNow, playNext, add, source);
     row.append(thumb, info, actions);
     return row;
   }));
 }
 
-function queueYouTube(section, video, playNow) {
+// mode is "now", "next" (Up next), or "queue" (just add it).
+function queueYouTube(section, video, mode) {
   const status = section.querySelector(".search-status");
+  const playNow = mode === "now";
+  const playNext = mode === "next";
 
   if (isRemote) {
-    sendCommand({ type: "addYouTube", video, playNow });
+    sendCommand({ type: "addYouTube", video, playNow, playNext });
   } else {
-    addYouTubeTrack(video, playNow);
+    addYouTubeTrack(video, playNow, playNext);
   }
 
   status.textContent = playNow
     ? `Playing ${video.title} on the booth.`
-    : `Added ${video.title} to the booth queue.`;
+    : playNext ? `${video.title} plays after the current song.` : `Added ${video.title} to the booth queue.`;
 }
 
 async function downloadSearchResult(section, result, button) {
@@ -2652,8 +2947,15 @@ function renderRemote() {
 
     const actions = document.createElement("div");
     actions.className = "queue-actions";
+    if (track.upNext) {
+      row.classList.add("is-up-next");
+      title.prepend(upNextBadge(track.upNext));
+    }
+    const playNext = remoteAction(track.upNext ? "Cancel next" : "Play next", { type: "playNext", trackId: track.id });
+    if (track.upNext) playNext.classList.add("is-selected");
     actions.append(
-      remoteAction("Cue", { type: "jumpTo", trackId: track.id }),
+      remoteAction("Play now", { type: "jumpTo", trackId: track.id }),
+      playNext,
       remoteAction("Vote", { type: "vote", trackId: track.id }),
     );
 
@@ -2704,7 +3006,15 @@ function publicTrack(track) {
     duration: track.duration,
     energy: track.energy,
     votes: track.votes,
+    upNext: upNextPosition(track),
   };
+}
+
+function upNextBadge(position) {
+  const badge = document.createElement("span");
+  badge.className = "up-next-badge";
+  badge.textContent = position === 1 ? "Up next" : `Up next #${position}`;
+  return badge;
 }
 
 function sourceLabel(track) {

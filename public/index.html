@@ -187,8 +187,22 @@
                 <p id="remote-url" class="remote-url">Starting local link...</p>
               </div>
             </div>
+
+            <button id="sound-check-btn" class="queue-action sound-check-open" type="button">Sound check</button>
           </aside>
         </section>
+
+        <dialog id="sound-check" class="sound-check" aria-labelledby="sound-check-title">
+          <div class="section-title">
+            <div>
+              <p class="eyebrow">Before guests arrive</p>
+              <h2 id="sound-check-title">Sound check</h2>
+            </div>
+            <button id="sound-check-close" class="queue-action" type="button">Close</button>
+          </div>
+          <p id="sound-check-summary" class="search-status"></p>
+          <ol id="sound-check-list" class="sound-check-list"></ol>
+        </dialog>
 
         <section class="mixer-panel" aria-label="DJ mixer">
           <div class="section-title">

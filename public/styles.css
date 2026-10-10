@@ -1065,6 +1065,128 @@ input[type="range"] {
   color: #090805;
 }
 
+.sound-check-open {
+  width: 100%;
+  border-color: rgba(255, 178, 46, 0.6);
+  color: var(--amber);
+}
+
+.sound-check-open.is-ready {
+  border-color: rgba(32, 243, 198, 0.55);
+  color: var(--teal);
+}
+
+.qr-card.is-highlighted {
+  border-color: var(--lime);
+  box-shadow: 0 0 0 0.25rem rgba(216, 255, 61, 0.35);
+}
+
+.sound-check {
+  width: min(44rem, calc(100% - 2rem));
+  max-height: calc(100vh - 3rem);
+  padding: 1.2rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--panel-strong);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+
+.sound-check::backdrop {
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+}
+
+.sound-check-list {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.8rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sound-check-row {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sound-check-row p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.sound-check-mark {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  font-weight: 900;
+}
+
+.sound-check-row.is-ok .sound-check-mark {
+  background: var(--teal);
+  color: #06100d;
+}
+
+.sound-check-row.is-warn .sound-check-mark {
+  background: var(--amber);
+  color: #0a0905;
+}
+
+.sound-check-row.is-skip {
+  opacity: 0.55;
+}
+
+.sound-check-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+
+@media (max-width: 720px) {
+  .sound-check-row {
+    grid-template-columns: 2rem minmax(0, 1fr);
+  }
+
+  .sound-check-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
+.queue-row.is-up-next {
+  border-color: rgba(216, 255, 61, 0.55);
+}
+
+.queue-action.is-selected {
+  border-color: rgba(216, 255, 61, 0.7);
+  color: var(--lime);
+}
+
+.up-next-badge {
+  display: inline-flex;
+  margin-right: 0.45rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  background: var(--lime);
+  color: #080808;
+  font-size: 0.72rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
 .empty-state {
   padding: 1rem;
   border: 1px dashed rgba(255, 255, 255, 0.2);

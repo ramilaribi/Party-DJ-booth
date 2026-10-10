@@ -28,7 +28,8 @@ const patterns = [
   [/^(?:auto ?fade|fade(?: over| across| it)?|cross ?fade(?: over| across)?)$/, () => ({ action: "autoFade" })],
   [/^(?:use |set |switch to )?(?:the )?transition (?:to )?(.+)$/, (m) => transitionCommand(m[1])],
   [/^(?:use )?(?:the |a )?(bass swap|filter sweep|echo out|vinyl stop|brake|mix it up)(?: transition)?$/, (m) => transitionCommand(m[1])],
-  [/^(?:queue|queue up|add)(?: up)? (.+?)(?: to (?:the )?queue| next| later)?$/, (m) => songCommand("queueSong", m[1])],
+  [/^(?:play|put on|queue|queue up|add) (.+?) (?:next|after this(?: one| song)?)$/, (m) => songCommand("playNext", m[1])],
+  [/^(?:queue|queue up|add)(?: up)? (.+?)(?: to (?:the )?queue| later)?$/, (m) => songCommand("queueSong", m[1])],
   [/^(?:play|put on|i want to hear|can you play|could you play) (.+)$/, (m) => songCommand("playSong", m[1])],
 ];
 

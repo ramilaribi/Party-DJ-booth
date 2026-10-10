@@ -361,6 +361,7 @@ app.get("/api/session", requireBooth, async (req, res) => {
     localDisplayUrl: origin,
     localRemoteUrl: remoteUrl,
     qrDataUrl,
+    youtubeSearch: Boolean(youtubeApiKey),
     state: partyState,
   });
 });

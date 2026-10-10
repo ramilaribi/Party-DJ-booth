@@ -53,6 +53,9 @@ const cases = [
   ["put on the song despacito", { action: "playSong", query: "despacito" }],
   ["add Get Lucky to the queue", { action: "queueSong", query: "get lucky" }],
   ["queue up blinding lights", { action: "queueSong", query: "blinding lights" }],
+  ["play Get Lucky next", { action: "playNext", query: "get lucky" }],
+  ["add didi by khaled next", { action: "playNext", query: "didi by khaled" }],
+  ["put on starboy after this one", { action: "playNext", query: "starboy" }],
   ["hey DJ, next", { action: "next" }],
   ["OK booth louder", { action: "volume", delta: 15 }],
 ];
