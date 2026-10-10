@@ -45,6 +45,8 @@ const guestCode = crypto.randomBytes(6).toString("base64url");
 // How many votes (taking one back counts too) and song requests one guest phone may send a minute.
 const guestLimits = { vote: 30, request: 3 };
 const guestActivity = new Map();
+// The booth's latest list of guests' song requests, for DJ phones that connect later.
+let latestRequests = [];
 
 await fs.promises.mkdir(downloadsDir, { recursive: true });
 
@@ -581,6 +583,17 @@ app.post("/api/download", requirePairing, async (req, res) => {
   }
 });
 
+// The booth is trusted, but the list still goes to phones, so keep it to the expected shape and size.
+function publicRequests(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 30).map((item) => ({
+    id: String(item?.id || "").slice(0, 64),
+    text: String(item?.text || "").slice(0, 120),
+    count: Math.max(1, Math.min(999, Number(item?.count) || 1)),
+    match: item?.match ? String(item.match).slice(0, 200) : "",
+  }));
+}
+
 function updatePresence() {
   let displays = 0;
   let remotes = 0;
@@ -671,7 +684,12 @@ io.use((socket, next) => {
 
 io.on("connection", (socket) => {
   // Commands and downloads go only to the booth, so phones never see each other's commands.
+  // Guests' song requests go only to DJ phones.
   if (socket.data.role === "display") socket.join("booth");
+  if (socket.data.role === "remote") {
+    socket.join("remotes");
+    socket.emit("requests", latestRequests);
+  }
   updatePresence();
   socket.emit("state", partyState);
 
@@ -687,6 +705,12 @@ io.on("connection", (socket) => {
       connectedGuests: partyState.connectedGuests,
     };
     socket.broadcast.emit("state", partyState);
+  });
+
+  socket.on("display:requests", (list) => {
+    if (socket.data.role !== "display") return;
+    latestRequests = publicRequests(list);
+    io.to("remotes").emit("requests", latestRequests);
   });
 
   socket.on("remote:command", (command) => {

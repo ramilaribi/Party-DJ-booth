@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#050505">
     <meta
       name="description"
@@ -327,6 +327,11 @@
         </template>
 
         <section id="remote-view" class="remote-view" hidden>
+          <div id="remote-banner" class="remote-banner" role="status" aria-live="polite" hidden>
+            <strong id="remote-banner-title">Connecting to the booth</strong>
+            <p id="remote-banner-detail"></p>
+          </div>
+
           <div class="phone-now">
             <p class="eyebrow">Now Playing</p>
             <h2 id="remote-track-title">Waiting for the Mac</h2>
@@ -338,6 +343,24 @@
               </div>
               <span id="remote-duration">0:00</span>
             </div>
+            <p id="remote-next" class="phone-next" hidden></p>
+            <div class="energy-presets" role="group" aria-label="Room energy" data-dj-only>
+              <button type="button" class="energy-preset" data-energy="15" aria-pressed="false">Afterglow</button>
+              <button type="button" class="energy-preset" data-energy="38" aria-pressed="false">Warmup</button>
+              <button type="button" class="energy-preset" data-energy="60" aria-pressed="false">Groove</button>
+              <button type="button" class="energy-preset" data-energy="86" aria-pressed="false">Peak</button>
+            </div>
+          </div>
+
+          <div id="remote-requests" class="remote-card" data-dj-only hidden>
+            <div class="section-title">
+              <div>
+                <p class="eyebrow">Guests</p>
+                <h2>Song requests</h2>
+              </div>
+              <span id="remote-requests-count" class="pill muted">0 waiting</span>
+            </div>
+            <div id="remote-requests-list" class="requests-list"></div>
           </div>
 
           <div id="guest-request" class="remote-card" hidden>
@@ -354,7 +377,7 @@
             <p id="guest-request-status" class="search-status">The DJ sees your request on the booth and picks what plays.</p>
           </div>
 
-          <div class="remote-pad" data-dj-only>
+          <div class="remote-pad" role="group" aria-label="Playback" data-dj-only>
             <button data-command="previous" class="remote-button">Prev</button>
             <button data-command="playPause" class="remote-button primary">Play</button>
             <button data-command="next" class="remote-button">Next</button>

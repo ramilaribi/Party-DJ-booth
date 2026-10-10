@@ -70,6 +70,15 @@ const els = {
   remoteCrossfade: document.querySelector("#remote-crossfade"),
   remoteQueue: document.querySelector("#remote-queue"),
   remoteQueueCount: document.querySelector("#remote-queue-count"),
+  remoteBanner: document.querySelector("#remote-banner"),
+  remoteBannerTitle: document.querySelector("#remote-banner-title"),
+  remoteBannerDetail: document.querySelector("#remote-banner-detail"),
+  phoneNow: document.querySelector(".phone-now"),
+  remoteNext: document.querySelector("#remote-next"),
+  energyPresets: document.querySelectorAll(".energy-preset"),
+  remoteRequests: document.querySelector("#remote-requests"),
+  remoteRequestsCount: document.querySelector("#remote-requests-count"),
+  remoteRequestsList: document.querySelector("#remote-requests-list"),
   searchSections: document.querySelectorAll(".music-search"),
   stage: document.querySelector(".stage"),
   youtubeStage: document.querySelector("#youtube-stage"),
@@ -176,6 +185,14 @@ const deckStrips = [];
 let renderTick = 0;
 let lastSync = 0;
 let remoteState = {};
+// Phone connection: whether it ever connected, and whether the server refused its link.
+let everConnected = false;
+let linkRefused = false;
+// The phone redraws its queue only when this changes, so a button never vanishes under a finger.
+let queueSignature = "";
+// Guests' requests: the list a DJ phone shows, and what the booth last sent out.
+let remoteRequests = [];
+let publishedRequests = "";
 
 const settings = readJson(settingsKey, {
   energy: 52,
@@ -205,7 +222,9 @@ const booth = {
   history: [],
   // Track ids someone asked to play next, oldest request first.
   upNext: [],
-  // Guests' song requests, newest first. Only the booth sees them.
+  // What the booth will play next, for the phone's "Next" line.
+  nextTrackId: null,
+  // Guests' song requests, newest first. The booth and DJ phones see them, guests don't.
   requests: [],
   guestRequests: settings.guestRequests ?? true,
 };
@@ -226,6 +245,8 @@ function boot() {
   bindSocket();
   bindSearchControls();
   bindVoiceControls();
+
+  if (isRemote) renderConnection();
 
   if (isGuest) {
     bindGuestControls();
@@ -248,14 +269,25 @@ function boot() {
 function bindSocket() {
   socket.on("connect", () => {
     els.connectionPill.textContent = isGuest ? "Guest linked" : isRemote ? "Remote linked" : "Booth live";
+    everConnected = true;
+    linkRefused = false;
+    renderConnection();
     renderSoundCheck();
+    // A restarted server has forgotten the request list, so send it again.
+    if (!isRemote) {
+      publishedRequests = "";
+      renderRequests();
+    }
   });
 
   socket.on("connect_error", (error) => {
+    renderConnection();
     if (error.message !== "not-authorized") return;
     els.connectionPill.textContent = "Not linked";
 
     if (isRemote) {
+      linkRefused = true;
+      renderConnection();
       els.remoteTrackTitle.textContent = "Scan the QR code again";
       els.remoteTrackMeta.textContent = isGuest
         ? "This guest link is missing or out of date. Scan the guest QR code at the booth to join again."
@@ -269,7 +301,14 @@ function bindSocket() {
 
   socket.on("disconnect", () => {
     els.connectionPill.textContent = "Disconnected";
+    renderConnection();
     renderSoundCheck();
+  });
+
+  socket.on("requests", (list) => {
+    if (isGuest) return;
+    remoteRequests = Array.isArray(list) ? list : [];
+    renderRemoteRequests();
   });
 
   socket.on("presence", (presence) => {
@@ -499,27 +538,77 @@ function renderRecentSearches(section) {
 }
 
 function bindRemoteControls() {
+  // The transport bar is fixed to the bottom of the screen, so leave room for it.
+  els.remoteView.classList.add("has-pad");
+
   document.querySelectorAll("[data-command]").forEach((button) => {
     button.addEventListener("click", () => {
-      sendCommand({ type: button.dataset.command });
+      if (sendCommand({ type: button.dataset.command })) acknowledge(button);
     });
   });
 
-  els.remoteVolume.addEventListener("input", () => {
-    sendCommand({ type: "setVolume", value: Number(els.remoteVolume.value) });
+  els.energyPresets.forEach((preset) => {
+    preset.addEventListener("click", () => {
+      if (sendCommand({ type: "setEnergy", value: Number(preset.dataset.energy) })) acknowledge(preset);
+    });
   });
 
-  els.remoteEnergy.addEventListener("input", () => {
-    sendCommand({ type: "setEnergy", value: Number(els.remoteEnergy.value) });
-  });
-
-  els.remoteCrossfade.addEventListener("input", () => {
-    sendCommand({ type: "setCrossfade", value: Number(els.remoteCrossfade.value) });
+  [
+    [els.remoteVolume, "setVolume"],
+    [els.remoteEnergy, "setEnergy"],
+    [els.remoteCrossfade, "setCrossfade"],
+  ].forEach(([slider, type]) => {
+    holdWhileDragging(slider);
+    slider.addEventListener("input", () => {
+      showSliderFill(slider);
+      sendCommand({ type, value: Number(slider.value) });
+    });
   });
 
   els.remoteTransition.addEventListener("change", () => {
     sendCommand({ type: "setTransition", value: els.remoteTransition.value });
   });
+}
+
+// While a finger is on a slider, and for a moment after it lifts, the booth's state still carries
+// the old value. Don't let it pull the slider back.
+function holdWhileDragging(slider) {
+  const holdBriefly = () => {
+    slider.dataset.heldUntil = String(Date.now() + 1500);
+  };
+  slider.addEventListener("pointerdown", () => {
+    slider.dataset.held = "true";
+    holdBriefly();
+  });
+  ["pointerup", "pointercancel", "touchend", "change"].forEach((name) => {
+    slider.addEventListener(name, () => {
+      delete slider.dataset.held;
+      holdBriefly();
+    });
+  });
+  slider.addEventListener("input", holdBriefly);
+}
+
+function setRemoteSlider(slider, value) {
+  if (slider.dataset.held || Number(slider.dataset.heldUntil || 0) > Date.now()) return;
+  slider.value = String(value);
+  showSliderFill(slider);
+}
+
+// Phone sliders draw their own track, filled up to the value.
+function showSliderFill(slider) {
+  const min = Number(slider.min || 0);
+  const max = Number(slider.max || 100);
+  slider.style.setProperty("--fill", `${((Number(slider.value) - min) / (max - min || 1)) * 100}%`);
+}
+
+// A short flash (and a buzz on phones that can) says the tap reached the booth.
+function acknowledge(button) {
+  button.classList.remove("is-sent");
+  void button.offsetWidth;
+  button.classList.add("is-sent");
+  // Browsers only allow vibration after a real tap on the page.
+  if (navigator.userActivation?.hasBeenActive) navigator.vibrate?.(12);
 }
 
 async function loadDownloadedTracks() {
@@ -545,8 +634,55 @@ function apiFetch(url, options = {}) {
   return fetch(url, { ...options, headers: { ...options.headers, "X-Party-Session": sessionCode } });
 }
 
+// Socket.IO would hold commands while the phone is offline and send them all on reconnect, which
+// could skip several songs at once. Drop them instead, and nudge the banner that says why.
 function sendCommand(command) {
+  if (connectionProblem()) {
+    els.remoteBanner.classList.remove("is-nudged");
+    void els.remoteBanner.offsetWidth;
+    els.remoteBanner.classList.add("is-nudged");
+    return false;
+  }
   socket.emit("remote:command", command);
+  return true;
+}
+
+// Why a phone can't control the booth right now, or null when it can.
+function connectionProblem() {
+  if (linkRefused) {
+    return {
+      title: "This link is out of date",
+      detail: isGuest
+        ? "The booth was restarted, so the guest code changed. Scan the new guest QR code at the booth."
+        : "The server was restarted, so the code changed. Scan the QR code on the Mac again.",
+    };
+  }
+  if (!socket.connected) {
+    return {
+      title: everConnected ? "Reconnecting to the booth…" : "Connecting to the booth…",
+      detail: "Check this phone is on the same Wi-Fi as the Mac. Nothing you tap is sent until it's back.",
+    };
+  }
+  if (!remoteState.connectedDisplays) {
+    const port = window.location.port ? `:${window.location.port}` : "";
+    return {
+      title: "The booth isn't open",
+      detail: isGuest
+        ? "The music player on the Mac is closed. Votes and requests work again when it's back."
+        : `Open http://localhost${port} on the Mac. Your controls work again as soon as it's open.`,
+    };
+  }
+  return null;
+}
+
+function renderConnection() {
+  if (!isRemote) return;
+  const problem = connectionProblem();
+  els.remoteBanner.hidden = !problem;
+  els.remoteView.classList.toggle("is-offline", Boolean(problem));
+  if (!problem) return;
+  els.remoteBannerTitle.textContent = problem.title;
+  els.remoteBannerDetail.textContent = problem.detail;
 }
 
 function handleRemoteCommand(command) {
@@ -579,6 +715,8 @@ function handleRemoteCommand(command) {
   }
 
   if (command.type === "vote") voteForTrack(command);
+  if (command.type === "requestPlayNext") playRequestNext(command.requestId);
+  if (command.type === "requestDone") removeRequest(command.requestId);
 
   if (command.type === "setVolume") setVolume(command.value);
   if (command.type === "setEnergy") setEnergy(command.value);
@@ -691,8 +829,9 @@ async function submitVoiceText(section, text) {
 
   if (isRemote) {
     // The booth runs the command and reports back through its state message.
-    sendCommand({ type: "voice", text });
-    status.textContent = `Sent “${text}” to the booth.`;
+    status.textContent = sendCommand({ type: "voice", text })
+      ? `Sent “${text}” to the booth.`
+      : "Not sent: the booth isn't reachable right now.";
     return;
   }
 
@@ -2288,8 +2427,6 @@ function renderPlatter(deck, parts) {
   platterLabel.classList.toggle("has-art", Boolean(videoId));
 }
 
-// --- Sound check ------------------------------------------------------------------------------
-
 // --- Guests ------------------------------------------------------------------------------------
 
 function countLabel(count, word) {
@@ -2384,32 +2521,42 @@ function removeRequest(id) {
   renderRequests();
 }
 
-// Search for a request on the booth: on YouTube when it's set up, since it finds almost anything.
-function searchForRequest(request) {
-  const section = els.displayView.querySelector(".music-search");
-  const source = sessionInfo.youtubeSearch ? "youtube" : "archive";
-  section.querySelector(`.source-tab[data-source="${source}"]`).click();
-  section.querySelector(".search-input").value = request.text;
+// A request for a song that's already queued: put it on Up next and clear the request.
+function playRequestNext(id) {
+  const request = booth.requests.find((item) => item.id === id);
+  if (!request) return;
+  const index = findQueuedTrack(request.text, booth.tracks);
+  if (index < 0) return;
+
+  booth.message = playNextMessage(booth.tracks[index], addToUpNext(index));
+  removeRequest(id);
+  renderDisplay();
+  syncFromDisplay(true);
+}
+
+// Search for a request in this screen's Find Music card: on YouTube when it's set up, since it
+// finds almost anything.
+function searchForRequest(text) {
+  const section = (isRemote ? els.remoteView : els.displayView).querySelector(".music-search");
+  const youtube = isRemote ? remoteState.youtubeSearch : sessionInfo.youtubeSearch;
+  section.querySelector(`.source-tab[data-source="${youtube ? "youtube" : "archive"}"]`).click();
+  section.querySelector(".search-input").value = text;
   section.querySelector(".search-form").requestSubmit();
   section.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
-function renderRequests() {
-  if (isRemote) return;
-  els.requestsCount.textContent = `${booth.requests.length} waiting`;
+// DJ phones get the request list (never guests), as plain rows the booth already worked out.
+function publishRequests(rows) {
+  const json = JSON.stringify(rows);
+  if (json === publishedRequests) return;
+  publishedRequests = json;
+  socket.emit("display:requests", rows);
+}
 
-  if (!booth.guestRequests) {
-    els.requestsList.innerHTML = `<div class="empty-state">Requests are off. Guests can still vote.</div>`;
-    return;
-  }
-  if (!booth.requests.length) {
-    els.requestsList.innerHTML = `<div class="empty-state">No requests yet. Guests send them after scanning the Guests QR code.</div>`;
-    return;
-  }
-
-  // Most-wanted first, then newest.
-  const requests = [...booth.requests].sort((a, b) => b.voters.size - a.voters.size || b.at - a.at);
-  els.requestsList.replaceChildren(...requests.map((request) => {
+function renderRemoteRequests() {
+  els.remoteRequests.hidden = !remoteRequests.length;
+  els.remoteRequestsCount.textContent = `${remoteRequests.length} waiting`;
+  els.remoteRequestsList.replaceChildren(...remoteRequests.map((request) => {
     const row = document.createElement("article");
     row.className = "request-row";
 
@@ -2419,24 +2566,68 @@ function renderRequests() {
     title.textContent = request.text;
     const meta = document.createElement("p");
     meta.className = "queue-meta";
-    const index = findQueuedTrack(request.text, booth.tracks);
-    const match = booth.tracks[index];
+    const asked = request.count === 1 ? "1 guest asked" : `${request.count} guests asked`;
+    meta.textContent = request.match ? `${asked} - in your queue: ${request.match}` : asked;
+    info.append(title, meta);
+
+    const actions = document.createElement("div");
+    actions.className = "queue-actions";
+    if (request.match) actions.append(remoteAction("Play next", { type: "requestPlayNext", requestId: request.id }));
+    actions.append(
+      actionButton("Search", () => searchForRequest(request.text)),
+      remoteAction("Done", { type: "requestDone", requestId: request.id }),
+    );
+
+    row.append(info, actions);
+    return row;
+  }));
+}
+
+function renderRequests() {
+  if (isRemote) return;
+  els.requestsCount.textContent = `${booth.requests.length} waiting`;
+
+  if (!booth.guestRequests) {
+    publishRequests([]);
+    els.requestsList.innerHTML = `<div class="empty-state">Requests are off. Guests can still vote.</div>`;
+    return;
+  }
+  if (!booth.requests.length) {
+    publishRequests([]);
+    els.requestsList.innerHTML = `<div class="empty-state">No requests yet. Guests send them after scanning the Guests QR code.</div>`;
+    return;
+  }
+
+  // Most-wanted first, then newest. Each request is matched against the queue once per render.
+  const requests = [...booth.requests]
+    .sort((a, b) => b.voters.size - a.voters.size || b.at - a.at)
+    .map((request) => ({ request, match: booth.tracks[findQueuedTrack(request.text, booth.tracks)] }));
+  publishRequests(requests.map(({ request, match }) => ({
+    id: request.id,
+    text: request.text,
+    count: request.voters.size,
+    match: match?.title || "",
+  })));
+
+  els.requestsList.replaceChildren(...requests.map(({ request, match }) => {
+    const row = document.createElement("article");
+    row.className = "request-row";
+
+    const info = document.createElement("div");
+    const title = document.createElement("p");
+    title.className = "queue-title";
+    title.textContent = request.text;
+    const meta = document.createElement("p");
+    meta.className = "queue-meta";
     const asked = request.voters.size === 1 ? "1 guest asked" : `${request.voters.size} guests asked`;
     meta.textContent = match ? `${asked} - in your queue: ${match.title}` : `${asked} - ${timeAgo(request.at)}`;
     info.append(title, meta);
 
     const actions = document.createElement("div");
     actions.className = "queue-actions";
-    if (match) {
-      actions.append(actionButton("Play next", () => {
-        booth.message = playNextMessage(match, addToUpNext(index));
-        removeRequest(request.id);
-        renderDisplay();
-        syncFromDisplay(true);
-      }));
-    }
+    if (match) actions.append(actionButton("Play next", () => playRequestNext(request.id)));
     actions.append(
-      actionButton("Search", () => searchForRequest(request)),
+      actionButton("Search", () => searchForRequest(request.text)),
       actionButton("Done", () => removeRequest(request.id)),
     );
 
@@ -2463,7 +2654,10 @@ function bindGuestControls() {
       els.guestRequestStatus.textContent = "Type a song name first.";
       return;
     }
-    sendCommand({ type: "request", text });
+    if (!sendCommand({ type: "request", text })) {
+      els.guestRequestStatus.textContent = "Not sent: the booth isn't reachable right now.";
+      return;
+    }
     els.guestRequestInput.value = "";
     els.guestRequestStatus.textContent = `Sent “${text}” to the DJ.`;
   });
@@ -2478,7 +2672,8 @@ function guestVoteButton(track) {
   const voted = guestVotes.has(track.id);
   const button = actionButton(voted ? "Voted" : "Vote", () => {
     const type = guestVotes.has(track.id) ? "unvote" : "vote";
-    sendCommand({ type, trackId: track.id });
+    if (!sendCommand({ type, trackId: track.id })) return;
+    acknowledge(button);
     if (type === "vote") guestVotes.add(track.id);
     else guestVotes.delete(track.id);
     saveGuestVotes();
@@ -2503,6 +2698,8 @@ function saveGuestVotes() {
     // Private windows can refuse storage; the buttons just won't survive a reload.
   }
 }
+
+// --- Sound check ------------------------------------------------------------------------------
 
 function bindSoundCheck() {
   els.soundCheckBtn.addEventListener("click", () => {
@@ -2911,6 +3108,7 @@ function renderDisplay() {
   const currentTrack = booth.tracks[booth.currentIndex];
   const mode = energyMode(booth.energy);
   const nextTrack = booth.tracks.length > 1 ? booth.tracks[chooseNextIndex()] : null;
+  booth.nextTrackId = nextTrack?.id || null;
 
   els.modeLabel.textContent = mode;
   els.trackTitle.textContent = currentTrack ? currentTrack.title : "Load your playlist";
@@ -3055,8 +3253,11 @@ function renderYouTubeResults(section, results) {
   }
 
   const addAll = actionButton(`Add all ${results.length} to the queue`, () => {
-    if (isRemote) sendCommand({ type: "addYouTubeList", videos: results });
-    else addYouTubeList(results);
+    if (isRemote) {
+      if (!sendCommand({ type: "addYouTubeList", videos: results })) return;
+    } else {
+      addYouTubeList(results);
+    }
     section.querySelector(".search-status").textContent = `Added ${results.length} songs to the booth queue.`;
     addAll.disabled = true;
     addAll.textContent = "All added";
@@ -3087,12 +3288,10 @@ function renderYouTubeResults(section, results) {
     actions.className = "search-result-actions";
     const playNow = actionButton("Play now", () => queueYouTube(section, video, "now"));
     const playNext = actionButton("Play next", () => {
-      queueYouTube(section, video, "next");
-      playNext.textContent = "Up next";
+      if (queueYouTube(section, video, "next")) playNext.textContent = "Up next";
     });
     const add = actionButton("Add to queue", () => {
-      queueYouTube(section, video, "queue");
-      add.textContent = "Added";
+      if (queueYouTube(section, video, "queue")) add.textContent = "Added";
     });
 
     const source = document.createElement("a");
@@ -3108,14 +3307,17 @@ function renderYouTubeResults(section, results) {
   }));
 }
 
-// mode is "now", "next" (Up next), or "queue" (just add it).
+// mode is "now", "next" (Up next), or "queue" (just add it). Returns whether it reached the booth.
 function queueYouTube(section, video, mode) {
   const status = section.querySelector(".search-status");
   const playNow = mode === "now";
   const playNext = mode === "next";
 
   if (isRemote) {
-    sendCommand({ type: "addYouTube", video, playNow, playNext });
+    if (!sendCommand({ type: "addYouTube", video, playNow, playNext })) {
+      status.textContent = "Not sent: the booth isn't reachable right now.";
+      return false;
+    }
   } else {
     addYouTubeTrack(video, playNow, playNext);
   }
@@ -3123,6 +3325,7 @@ function queueYouTube(section, video, mode) {
   status.textContent = playNow
     ? `Playing ${video.title} on the booth.`
     : playNext ? `${video.title} plays after the current song.` : `Added ${video.title} to the booth queue.`;
+  return true;
 }
 
 async function downloadSearchResult(section, result, button) {
@@ -3174,8 +3377,16 @@ function tagButton(label, track, energy) {
 function renderRemote() {
   const playlist = remoteState.playlist || [];
   const current = playlist.find((track) => track.id === remoteState.currentTrackId);
+  const next = playlist.find((track) => track.id === remoteState.nextTrackId);
   const duration = remoteState.duration || current?.duration || 0;
   const progress = duration ? clamp((remoteState.currentTime / duration) * 100, 0, 100) : 0;
+  const art = current?.videoId ? `url("https://i.ytimg.com/vi/${current.videoId}/mqdefault.jpg")` : "";
+
+  renderConnection();
+  els.phoneNow.classList.toggle("has-art", Boolean(art));
+  els.phoneNow.style.setProperty("--art", art || "none");
+  els.remoteNext.hidden = !next || next === current;
+  els.remoteNext.textContent = next ? `Next: ${next.title}` : "";
 
   els.remoteCount.textContent = isGuest
     ? countLabel(remoteState.connectedGuests || 0, "guest")
@@ -3189,9 +3400,15 @@ function renderRemote() {
   els.remoteElapsed.textContent = formatTime(remoteState.currentTime || 0);
   els.remoteDuration.textContent = duration ? formatTime(duration) : "0:00";
   els.remoteProgress.style.width = `${progress}%`;
-  els.remoteVolume.value = String(remoteState.volume ?? 100);
-  els.remoteEnergy.value = String(remoteState.energy ?? 52);
-  els.remoteCrossfade.value = String(remoteState.crossfade ?? 5);
+  setRemoteSlider(els.remoteVolume, remoteState.volume ?? 100);
+  setRemoteSlider(els.remoteEnergy, remoteState.energy ?? 52);
+  setRemoteSlider(els.remoteCrossfade, remoteState.crossfade ?? 5);
+  const mode = energyMode(remoteState.energy ?? 52);
+  els.energyPresets.forEach((preset) => {
+    const selected = energyMode(Number(preset.dataset.energy)) === mode;
+    preset.classList.toggle("is-selected", selected);
+    preset.setAttribute("aria-pressed", String(selected));
+  });
   if (document.activeElement !== els.remoteTransition) els.remoteTransition.value = remoteState.transition || "crossfade";
   els.remoteQueueCount.textContent = `${playlist.length} tracks`;
 
@@ -3209,9 +3426,19 @@ function renderRemote() {
   if (playButton) playButton.textContent = remoteState.playing ? "Pause" : "Play";
 
   if (!playlist.length) {
+    queueSignature = "";
     els.remoteQueue.innerHTML = `<div class="empty-state">The Mac has not loaded a playlist yet.</div>`;
     return;
   }
+
+  // The booth sends its state several times a second. Redraw the queue only when it changed.
+  const signature = JSON.stringify([
+    remoteState.currentTrackId,
+    isGuest ? [...guestVotes] : null,
+    playlist.map((track) => [track.id, track.title, track.artist, track.duration, track.kind, track.votes, track.upNext]),
+  ]);
+  if (signature === queueSignature) return;
+  queueSignature = signature;
 
   els.remoteQueue.replaceChildren(...playlist.map((track, index) => {
     const row = document.createElement("article");
@@ -3236,6 +3463,14 @@ function renderRemote() {
       row.classList.add("is-up-next");
       title.prepend(upNextBadge(track.upNext));
     }
+    if (track.id === remoteState.currentTrackId) {
+      const playing = document.createElement("span");
+      playing.className = "now-label";
+      playing.textContent = "Now playing";
+      actions.append(playing);
+      row.append(indexEl, info, actions);
+      return row;
+    }
     if (isGuest) {
       actions.append(guestVoteButton(track));
       row.append(indexEl, info, actions);
@@ -3244,11 +3479,9 @@ function renderRemote() {
 
     const playNext = remoteAction(track.upNext ? "Cancel next" : "Play next", { type: "playNext", trackId: track.id });
     if (track.upNext) playNext.classList.add("is-selected");
-    actions.append(
-      remoteAction("Play now", { type: "jumpTo", trackId: track.id }),
-      playNext,
-      remoteAction("Vote", { type: "vote", trackId: track.id }),
-    );
+    const playNow = remoteAction("Play now", { type: "jumpTo", trackId: track.id });
+    playNow.classList.add("is-now");
+    actions.append(playNow, playNext, remoteAction("Vote", { type: "vote", trackId: track.id }));
 
     row.append(indexEl, info, actions);
     return row;
@@ -3260,7 +3493,9 @@ function remoteAction(label, command) {
   button.className = "queue-action";
   button.type = "button";
   button.textContent = label;
-  button.addEventListener("click", () => sendCommand(command));
+  button.addEventListener("click", () => {
+    if (sendCommand(command)) acknowledge(button);
+  });
   return button;
 }
 
@@ -3285,6 +3520,8 @@ function syncFromDisplay(force = false) {
     volume: booth.volume,
     transition: booth.transition,
     guestRequests: booth.guestRequests,
+    youtubeSearch: sessionInfo.youtubeSearch,
+    nextTrackId: booth.nextTrackId,
     message: booth.message,
   });
 }
@@ -3299,6 +3536,7 @@ function publicTrack(track) {
     energy: track.energy,
     votes: track.votes,
     upNext: upNextPosition(track),
+    ...(track.kind === "youtube" ? { videoId: track.videoId } : {}),
   };
 }
 

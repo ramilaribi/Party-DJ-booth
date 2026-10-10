@@ -1319,6 +1319,199 @@ input[type="range"] {
   gap: 1rem;
 }
 
+.remote-banner {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(255, 178, 46, 0.6);
+  border-radius: var(--radius);
+  background: rgba(255, 178, 46, 0.12);
+}
+
+.remote-banner strong {
+  color: var(--amber);
+  font-size: 1.05rem;
+}
+
+.remote-banner p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.remote-banner.is-nudged {
+  animation: banner-nudge 360ms ease;
+}
+
+@keyframes banner-nudge {
+  25% {
+    transform: translateX(-6px);
+  }
+  75% {
+    transform: translateX(6px);
+  }
+}
+
+/* Offline controls stay tappable, so a tap can nudge the banner that explains why nothing happens. */
+.remote-view.is-offline .remote-pad button,
+.remote-view.is-offline .energy-preset,
+.remote-view.is-offline .remote-queue .queue-actions,
+.remote-view.is-offline input[type="range"] {
+  opacity: 0.4;
+}
+
+.phone-now.has-art::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--art) center / cover no-repeat;
+  opacity: 0.28;
+  filter: saturate(1.2);
+  pointer-events: none;
+}
+
+.phone-next {
+  margin: 0.85rem 0 0;
+  color: var(--muted);
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.energy-presets {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin-top: 1rem;
+}
+
+.energy-preset {
+  min-height: 3.1rem;
+  padding: 0 0.2rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--ink);
+  font-size: clamp(0.6rem, 2.6vw, 0.74rem);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.energy-preset.is-selected {
+  border-color: var(--lime);
+  background: rgba(216, 255, 61, 0.16);
+  color: var(--lime);
+}
+
+.now-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 3.35rem;
+  padding: 0 0.9rem;
+  color: var(--teal);
+  font-size: 0.8rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.queue-action.is-now {
+  border-color: rgba(32, 243, 198, 0.55);
+  color: var(--teal);
+}
+
+.remote-button.is-sent,
+.queue-action.is-sent,
+.energy-preset.is-sent {
+  animation: sent-flash 450ms ease-out;
+}
+
+@keyframes sent-flash {
+  from {
+    box-shadow: 0 0 0 0 rgba(216, 255, 61, 0.75);
+  }
+  to {
+    box-shadow: 0 0 0 0.7rem rgba(216, 255, 61, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .remote-banner.is-nudged,
+  .remote-button.is-sent,
+  .queue-action.is-sent,
+  .energy-preset.is-sent {
+    animation: none;
+  }
+}
+
+/* The DJ phone's transport bar stays at the bottom of the screen, in thumb reach. */
+[data-role="remote"] .remote-view.has-pad {
+  padding-bottom: calc(6.4rem + env(safe-area-inset-bottom));
+}
+
+[data-role="remote"] .remote-pad {
+  position: fixed;
+  z-index: 30;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: min(39rem, 100%);
+  margin: 0 auto;
+  grid-template-columns: 1fr 1.4fr 1fr 1fr;
+  gap: 0.5rem;
+  padding: 0.65rem max(0.7rem, env(safe-area-inset-right)) calc(0.65rem + env(safe-area-inset-bottom)) max(0.7rem, env(safe-area-inset-left));
+  border-top: 1px solid var(--line);
+  background: rgba(5, 5, 5, 0.9);
+  backdrop-filter: blur(16px);
+}
+
+[data-role="remote"] .remote-pad .remote-button {
+  min-height: 4.3rem;
+}
+
+/* Phone sliders: a big thumb and a filled track, for one-handed use. */
+[data-role="remote"] input[type="range"] {
+  height: 2.75rem;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+[data-role="remote"] input[type="range"]::-webkit-slider-runnable-track {
+  height: 0.55rem;
+  border-radius: 999px;
+  background: linear-gradient(to right, var(--teal) var(--fill, 50%), rgba(255, 255, 255, 0.16) var(--fill, 50%));
+}
+
+[data-role="remote"] input[type="range"]::-webkit-slider-thumb {
+  width: 1.9rem;
+  height: 1.9rem;
+  margin-top: -0.675rem;
+  border: 3px solid #06100d;
+  border-radius: 50%;
+  background: var(--teal);
+  box-shadow: 0 0 0 1px rgba(32, 243, 198, 0.5), 0 6px 18px rgba(0, 0, 0, 0.4);
+  -webkit-appearance: none;
+}
+
+[data-role="remote"] input[type="range"]::-moz-range-track {
+  height: 0.55rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+[data-role="remote"] input[type="range"]::-moz-range-progress {
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--teal);
+}
+
+[data-role="remote"] input[type="range"]::-moz-range-thumb {
+  width: 1.9rem;
+  height: 1.9rem;
+  border: 3px solid #06100d;
+  border-radius: 50%;
+  background: var(--teal);
+}
+
 [data-role="remote"] .display-grid,
 [data-role="remote"] .queue-panel,
 [data-role="remote"] .command-strip {
