@@ -306,6 +306,15 @@ How it was verified:
 
 Not verified yet: Manual mix with two YouTube decks on the crossfader, the platter nudge by hand, and how each transition sounds on real music.
 
+**Done on 2026-10-10: backlog items 1 and 2 (see [docs/EXPERIENCE_UPGRADES.md](docs/EXPERIENCE_UPGRADES.md)).**
+
+- **Real Play Next:** queue rows (Mac and phone) have **Play now** and **Play next**; YouTube results have Play now, Play next, and Add to queue; voice understands "play X next". Requests sit in `booth.upNext` in the order asked, outrank Auto DJ in `chooseNextIndex`, show "Up next" / "Up next #2" badges, and leave the list when they start (`rememberPlay`). **Cancel next** removes one. The phone's Play now now always plays.
+- **Sound Check:** a **Sound check** button under the QR code (showing how many items are left) opens a checklist dialog with 11 rows: booth connected, audio unlocked, music loaded, volume up, phone paired, transitions confirmed, YouTube set up, YouTube started, voice used, screen wake lock, notifications confirmed. Rows update live and offer one-click fixes. Manual confirmations last for the day. `/api/session` now reports whether YouTube search is on.
+
+How it was verified: 72 unit tests (new "play X next" phrases). In the booth: the checklist's starting states (volume at 0% flagged as a warning with a fix); Unlock audio, Sounds good, and Done turning their rows green and the counter dropping; two Play next requests getting "Up next" and "Up next #2" and taking over the Next readout from Auto DJ; Cancel next promoting the second request; no console errors.
+
+Not verified yet: Keep awake on a real Mac (the screen wake lock needs a visible page), and Play next from a real phone.
+
 What's next is open. Options: loops (new playback engine), waveforms, MIDI controller support, mixer controls on the phone, French voice commands, and a hands-free wake word.
 
 For the current experience-upgrade backlog, see [docs/EXPERIENCE_UPGRADES.md](docs/EXPERIENCE_UPGRADES.md). Suggested order:

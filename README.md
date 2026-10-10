@@ -52,7 +52,8 @@ The Mac booth has:
 - Auto mix with beat-matched transitions, or Manual mix with a crossfader. Both decks play your files or YouTube.
 - Seven transition styles: Crossfade, Bass swap, Filter sweep, Echo out, Brake, Cut on the beat, and Mix it up.
 - Energy control and an Auto DJ that plays every track before repeating.
-- Queue with cue, vote, and energy tagging.
+- Queue with Play now, Play next, voting, and energy tagging.
+- A Sound check that walks you through setup before guests arrive.
 - QR code for phone pairing.
 
 The phone remote has:
@@ -64,7 +65,7 @@ The phone remote has:
 - Voice commands through the phone keyboard's dictation key.
 - Volume, energy, and crossfade sliders, and the transition style.
 - Live now-playing progress.
-- Queue browsing with cue and vote actions.
+- Queue browsing with Play now, Play next, and Vote.
 
 ## Best Weekend Setup
 
@@ -76,10 +77,24 @@ The phone remote has:
 6. Search and download any extra open-audio tracks you want.
 7. Press Play on the Mac once.
 8. Scan the QR code from your phone.
-9. Put the Mac browser in full screen.
-10. Use the phone as the booth controller.
+9. Press **Sound check** (under the QR code) and work through anything that isn't green.
+10. Put the Mac browser in full screen.
+11. Use the phone as the booth controller.
 
 For a full checklist, see [docs/WEEKEND_RUNBOOK.md](docs/WEEKEND_RUNBOOK.md).
+
+### Sound check
+
+The **Sound check** button under the QR code counts what's left to do, and opens a checklist:
+
+- **Booth and audio:** the booth is connected, audio is unlocked, music is loaded, and the volume is up.
+- **Phone:** a phone is paired.
+- **Transitions:** you've heard one and they sound right.
+- **YouTube:** search is set up, and a YouTube song has played with sound.
+- **Voice:** a voice command has worked.
+- **Mac:** it stays awake, and notifications are off.
+
+Each row turns green on its own when it's true, and most have a one-click fix: **Unlock audio**, **Set to 80%**, **Show the QR code**, **Mix next**, **Talk**, and **Keep awake**. Keep awake uses the browser's screen wake lock, so the Mac won't sleep while the booth is open. The two rows you confirm yourself (transitions and notifications) stay checked for the rest of the day.
 
 For a working list of future party-experience improvements, see
 [docs/EXPERIENCE_UPGRADES.md](docs/EXPERIENCE_UPGRADES.md).
@@ -165,6 +180,7 @@ You can also type any command in either box.
 | "transition echo out", "use the bass swap", "mix it up" | Transition style |
 | "play One More Time by Daft Punk" | Plays it now: from the queue if it's there, otherwise YouTube's top result |
 | "add Get Lucky to the queue" | Adds YouTube's top result to the queue |
+| "play Get Lucky next" | Puts it in Up next, from the queue or YouTube |
 
 Starting with "hey DJ" or ending with "please" is fine. Commands are in English, and the Mac listens in English whatever your system language is.
 
@@ -247,11 +263,12 @@ With Auto DJ on and at least three tracks loaded:
 
 With Auto DJ off, songs play in list order and cut over when each song ends.
 
-### Next, Prev, and Cue
+### Next, Prev, Play now, and Play next
 
-- **Next** skips to the upcoming song shown under *Next* on the booth, with a crossfade.
+- **Next** skips to the upcoming song shown under *Next* on the booth, with your transition.
 - **Prev** restarts the current song if it is more than 4 seconds in. Otherwise it goes back to the song that actually played before.
-- **Cue** switches to the chosen song right away, crossfading into it if music is playing.
+- **Play now** (queue rows and search results) switches to that song right away.
+- **Play next** puts the song right after the current one without interrupting it. Requests line up in the order they were asked for, marked "Up next", "Up next #2", and so on, and they come before Auto DJ's own picks. Press **Cancel next** to take one off. Voice works too: "play Get Lucky next".
 
 ### Crossfade
 

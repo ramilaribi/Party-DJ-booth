@@ -238,6 +238,14 @@ Phone: keyboard dictation -> voice box -> remote:command {type: "voice", text} -
 - **Song requests** first look in the queue with `findQueuedTrack`. A track matches when at least 75% of the request's words (ignoring filler like "the", "by", "song") appear in its title and artist. The bar is high because a wrong match is worse than falling back to YouTube's top result.
 - **Speech recognition** needs a secure page, so the Talk button only appears where `window.isSecureContext` is true and the browser has the Web Speech API. The booth at `localhost` qualifies; a phone on `http://<lan-ip>` does not. That's why the phone uses its keyboard's dictation instead, which works in any text box. When the recognizer offers several transcripts, the first one that parses as a command wins, because recognizers often rank a near miss first.
 
+## Up Next
+
+`booth.upNext` holds track ids someone asked to play next, oldest first. `chooseNextIndex` returns the first playable one before anything else, so Next, Auto DJ, and the Manual mix safety net all honour it. `rememberPlay` drops a track from the list when it becomes current. The phone sees each track's position through `publicTrack().upNext`.
+
+## Sound Check
+
+`soundChecks()` builds the checklist from state the booth already has: the socket, `audioContext.state`, the queue, the master volume, the phone count from `presence`, `sessionInfo` flags (YouTube search on from `/api/session`, a YouTube player reaching PLAYING, a voice command parsed), the screen wake lock (`navigator.wakeLock`, taken again on `visibilitychange` because browsers release it when the page hides), and day-stamped confirmations in local storage. `renderSoundCheck()` runs with every booth render and keeps the button's "n to do" count current.
+
 ## Play History
 
 `rememberPlay` records each track that becomes current and increments its play count. Re-cueing the current track does not count twice.

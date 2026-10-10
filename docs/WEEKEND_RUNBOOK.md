@@ -24,6 +24,7 @@ http://localhost:4242
 8. Search and download any extra open-audio tracks you want ready.
 9. Press Play once on the Mac to unlock browser audio.
 10. Scan the QR code with your phone.
+11. Press **Sound check** under the QR code and fix anything that isn't green. Press **Keep awake** there so the Mac doesn't sleep.
 11. If you plan to use YouTube, check the terminal says `YouTube search: on`. Queue the YouTube songs you already know you want.
 
 ## Sound Check

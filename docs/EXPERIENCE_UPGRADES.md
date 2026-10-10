@@ -4,8 +4,8 @@ Use this as the working list for making Party DJ Booth more useful during a real
 
 ## Recommended Order
 
-1. Preflight / Sound Check Mode
-2. Real Play Next
+1. Preflight / Sound Check Mode (done 2026-10-10)
+2. Real Play Next (done 2026-10-10)
 3. Guest Vote QR
 4. Better Phone Remote
 5. Party Recovery Button
@@ -16,6 +16,8 @@ Use this as the working list for making Party DJ Booth more useful during a real
 10. Waveform Preview
 
 ## 1. Preflight / Sound Check Mode
+
+**Status: done (2026-10-10).** Built as a Sound check button and checklist dialog; see Sound check in the README.
 
 A guided checklist before guests arrive.
 
@@ -43,6 +45,8 @@ Why it helps:
 - Makes the app safer to rely on before people arrive.
 
 ## 2. Real Play Next
+
+**Status: done (2026-10-10).** Play now and Play next on queue rows, search results, the phone, and voice; see the README.
 
 Separate "play this now" from "put this after the current song."
 
