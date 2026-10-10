@@ -64,21 +64,21 @@ YouTube tracks are streamed, never stored. The booth plays them through YouTube'
 ## Realtime Flow
 
 1. Mac opens `http://localhost:4242/`.
-2. Phone opens `/?remote=1&session=<code>` from the QR code.
-3. Both connect to Socket.IO and declare their role in the handshake: `display` for the Mac, `remote` plus the session code for the phone.
+2. The DJ's phone opens `/?remote=1&session=<code>` from the DJ remote QR code. Guests open `/?guest=1&session=<guest code>` from the Guests QR code.
+3. All of them connect to Socket.IO and declare their role in the handshake: `display` for the Mac, `remote` plus the session code for the DJ's phone, `guest` plus the guest code for guests.
 4. The server checks the role before accepting the socket (see [Access Control](#access-control)).
 5. Mac broadcasts state with `display:state`.
 6. Phone sends commands with `remote:command`.
-7. Server broadcasts commands as `player:command`.
+7. Server forwards commands as `player:command` to the booth only (the `booth` room), so phones never see each other's commands. Guest commands are checked and rebuilt first (see [Guests](#guests)).
 8. Mac handles commands and rebroadcasts updated state.
 
 Socket.IO resends the handshake on every reconnect, so after a Wi-Fi drop the server checks the role again and counts the device correctly. After a server restart the session code is new, so phones with the old link are refused and show **Scan the QR code again**.
 
-The server works out the display and phone counts by counting live sockets by role each time a socket connects or disconnects. It then sends them out as a `presence` event. Recounting instead of keeping running totals means reconnects cannot push the counts out of sync.
+The server works out the display, phone, and guest counts by counting live sockets by role each time a socket connects or disconnects. It then sends them out as a `presence` event. Recounting instead of keeping running totals means reconnects cannot push the counts out of sync.
 
 ## Access Control
 
-The server trusts two kinds of clients.
+The server trusts three kinds of clients.
 
 **The booth** is a browser on this Mac at `localhost`. A request counts as the booth only when all three hold:
 
@@ -88,15 +88,18 @@ The server trusts two kinds of clients.
 
 **A paired phone** carries the session code from the QR link: in the Socket.IO handshake (`auth.session`) and in the `X-Party-Session` header on API calls. The code is 6 random bytes (`crypto.randomBytes`), regenerated on every server start, and compared in constant time. The `Origin` check applies here too.
 
-| Route or event | Booth | Paired phone | Anyone else |
-| --- | --- | --- | --- |
-| Static page files | yes | yes | yes |
-| Socket as `display`, `display:state` | yes | no | no |
-| Socket as `remote`, `remote:command` | yes | yes | no |
-| `GET /api/search`, `POST /api/download` | yes | yes | no |
-| `GET /api/youtube/search`, `GET /api/youtube/playlist` | yes | yes | no |
-| `GET /api/session` (QR code and session code) | yes | no | no |
-| `GET /api/downloads`, `/music/*` | yes | no | no |
+**A guest** carries the guest code, a second 6-byte code made the same way. It is only accepted with the `guest` role, so it can't open a DJ remote, and the API routes don't accept it at all.
+
+| Route or event | Booth | Paired phone | Guest | Anyone else |
+| --- | --- | --- | --- | --- |
+| Static page files | yes | yes | yes | yes |
+| Socket as `display`, `display:state` | yes | no | no | no |
+| Socket as `remote`, any `remote:command` | yes | yes | no | no |
+| Socket as `guest`, `remote:command` vote / unvote / request | yes | no | yes | no |
+| `GET /api/search`, `POST /api/download` | yes | yes | no | no |
+| `GET /api/youtube/search`, `GET /api/youtube/playlist` | yes | yes | no | no |
+| `GET /api/session` (QR codes and session code) | yes | no | no | no |
+| `GET /api/downloads`, `/music/*` | yes | no | no | no |
 
 Refused sockets get a `not-authorized` connect error, which the page turns into a plain message. Refused API calls get HTTP 403.
 
@@ -246,6 +249,16 @@ Phone: keyboard dictation -> voice box -> remote:command {type: "voice", text} -
 
 `soundChecks()` builds the checklist from state the booth already has: the socket, `audioContext.state`, the queue, the master volume, the phone count from `presence`, `sessionInfo` flags (YouTube search on from `/api/session`, a YouTube player reaching PLAYING, a voice command parsed), the screen wake lock (`navigator.wakeLock`, taken again on `visibilitychange` because browsers release it when the page hides), and day-stamped confirmations in local storage. `renderSoundCheck()` runs with every booth render and keeps the button's "n to do" count current.
 
+## Guests
+
+**Commands.** `guestCommand()` in `server.js` drops anything that isn't `vote`, `unvote`, or `request`, and builds a new command from checked fields: a track id that looks like one, or request text with control and right-to-left override characters removed, capped at 100 characters. The server adds `role` and `voter` after everything else, so a command can't claim to come from the DJ or from another phone. The voter is the phone's network address. Each address gets 30 vote taps and 3 requests per sliding minute; past that, the phone gets a `guest:notice` and the command is dropped. Invalid commands are dropped before they count.
+
+**Votes.** The booth keeps a `voters` set on each track. A guest vote counts only if that voter isn't in the set yet, and `unvote` removes it again. DJ votes (from the booth or the DJ remote) always count. The guest phone keeps its own voted track ids in local storage, tagged with the guest code, so the buttons survive a reload and start fresh after a server restart.
+
+**Requests.** `booth.requests` holds up to 30 requests, newest first. `requestKey()` in `voice.js` normalizes the text (lower case, no punctuation, no "can you play" or "please"), so the same song typed two ways merges into one request with a set of voters. `renderRequests()` sorts by how many guests asked, then by time, and runs `findQueuedTrack` on each one to offer **Play next** when the song is already queued. Requests stay on the booth: the shared state only carries a count in `booth.message`, and `guestRequests` (on or off), which the guest page uses to show or hide its request box.
+
+**QR card.** `/api/session` returns both links and QR images. The card shows the DJ code until a DJ phone is paired (`presence.remotes > 0`). Then `switchToGuestQr()` changes it to the guest code, unless someone picked a tab by hand.
+
 ## Play History
 
 `rememberPlay` records each track that becomes current and increments its play count. Re-cueing the current track does not count twice.
@@ -257,6 +270,7 @@ Prev restarts the current song if it is more than 4 seconds in. Otherwise it pop
 Local browser storage keeps:
 
 - mix mode (Auto or Manual) and the Beat match setting
+- whether guests can send song requests
 - each track's detected BPM and beat offset
 - master volume
 - energy setting
@@ -266,7 +280,7 @@ Local browser storage keeps:
 
 Energy tags are keyed by track: file name, size, and modified time for local files, or the Internet Archive item and file name for downloads. A tag is saved only when you set one. It is merged into the stored tags, so tags for tracks you did not load this session are kept. Both local files and downloads read their saved tag when they are added to the queue.
 
-Play counts, votes, and play history live in memory and reset when the page reloads.
+Play counts, votes, guest requests, and play history live in memory and reset when the page reloads. A guest phone stores which songs it voted for, for the current guest code only.
 
 Playlist files are not stored permanently. You choose them again when you start a new browser session.
 
@@ -275,26 +289,26 @@ Playlist files are not stored permanently. You choose them again when you start 
 `server.js`
 
 - Hosts the app.
-- Prints Mac and phone URLs.
-- Generates the QR code.
+- Prints the Mac, phone, and guest URLs.
+- Generates the DJ remote and guest QR codes.
 - Searches Internet Archive open audio collections.
 - Searches YouTube with the API key from `.env`, so the key never reaches a browser.
 - Downloads selected audio files into `music-downloads/`.
 - Keeps a small `.music-library.json` manifest.
 - Keeps the latest public booth state in memory.
-- Relays remote commands.
-- Decides who is the booth and who is a paired phone.
+- Relays remote commands to the booth, and checks, rebuilds, and rate-limits guest commands.
+- Decides who is the booth, who is a paired phone, and who is a guest.
 
 `public/app.js`
 
-- Detects Mac booth vs phone remote from URL params.
+- Detects Mac booth, phone remote, or guest from URL params.
 - Handles file import.
 - Handles music search (open audio and YouTube), downloads, and YouTube queueing.
 - Controls playback through the deck interface.
 - Runs transitions between the two decks, in any of the seven styles.
 - Listens for voice commands and runs them (booth), or forwards them (phone).
 - Draws the visualizer.
-- Renders booth and remote screens.
+- Renders booth, remote, and guest screens, and the booth's song request list.
 - Syncs state over Socket.IO.
 
 `public/mixing.js`
@@ -303,7 +317,7 @@ Playlist files are not stored permanently. You choose them again when you start 
 
 `public/voice.js`
 
-- Parses voice commands and matches song requests against the queue.
+- Parses voice commands, matches song requests against the queue, and keys guest requests so duplicates merge.
 
 `public/styles.css`
 
@@ -325,7 +339,6 @@ YouTube has a second limit: a browser tab that has never been on screen cannot s
 - Mixer controls on the phone.
 - Hands-free voice with a wake word ("DJ, next"), and French voice commands.
 - Saved playlist manifests.
-- Guest-only voting links separate from the DJ remote.
 - Album art extraction.
 - Keyboard shortcuts.
 - Lighting bridge for smart bulbs.

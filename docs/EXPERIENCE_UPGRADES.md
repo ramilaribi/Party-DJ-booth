@@ -1,4 +1,4 @@
-# Experience Upgrade Backlog
+  # Experience Upgrade Backlog
 
 Use this as the working list for making Party DJ Booth more useful during a real party. These are product ideas, not committed implementation instructions. Pick one item at a time, define the desired behavior, then build and verify it.
 
@@ -6,7 +6,7 @@ Use this as the working list for making Party DJ Booth more useful during a real
 
 1. Preflight / Sound Check Mode (done 2026-10-10)
 2. Real Play Next (done 2026-10-10)
-3. Guest Vote QR
+3. Guest Vote QR (done 2026-10-10)
 4. Better Phone Remote
 5. Party Recovery Button
 6. PWA Install Mode
@@ -66,6 +66,8 @@ Why it helps:
 - Makes phone control less risky.
 
 ## 3. Guest Vote QR
+
+**Status: done (2026-10-10).** Built as a Guests tab on the QR card with its own code, a guest page for voting and requests, and a Song requests card on the Mac; see Guests: Votes And Requests in the README.
 
 Add a second QR code for guests with limited permissions.
 

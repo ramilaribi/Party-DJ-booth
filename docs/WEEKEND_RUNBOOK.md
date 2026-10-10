@@ -26,6 +26,7 @@ http://localhost:4242
 10. Scan the QR code with your phone.
 11. If you plan to use YouTube, check the terminal says `YouTube search: on`. Queue the YouTube songs you already know you want.
 12. Press **Sound check** under the QR code and fix anything that isn't green. Press **Keep awake** there so the Mac doesn't sleep.
+13. Check the QR card now shows **Guests** (it switches by itself once your phone is paired). That's the code to share. If you have a TV, press **Show big for guests**.
 
 ## Sound Check
 
@@ -42,6 +43,7 @@ Check:
 - Crossfade works.
 - Crossfade still works with the booth hidden: put another window in front during a fade and listen for the next song coming in.
 - The QR code opens the remote.
+- A second phone scans the **Guests** code, can vote, and its song request shows up in **Song requests** on the Mac.
 - A YouTube song plays with sound, and crossfades in and out of one of your own files.
 - The Mixer shows a BPM for the playing song and the next one. A Next between two dance tracks should sound beat-matched.
 - Try two or three Transition styles with **Mix next**, so you know which ones suit your music.
@@ -72,6 +74,8 @@ Use voice when your hands are busy: "next", "louder", "more energy", or "play" a
 
 Use votes as a signal, not a command. If a song gets votes but would kill the room, leave it for later.
 
+Check **Song requests** on the Mac now and then. A request that's already in your queue has **Play next**; for the rest, **Search** finds it. Press **Done** when you've dealt with one. If requests get silly, turn off **Take song requests**. Guests can still vote.
+
 If someone asks for a song you do not have, use Find Music. Open audio searches legal collections and saves matching downloads on the Mac. YouTube finds almost anything and plays it on the booth right away, but it needs internet and can show ads.
 
 ## Recovery Moves
@@ -91,7 +95,7 @@ If a YouTube song won't play:
 If the phone remote disconnects:
 
 1. Keep music playing on the Mac.
-2. Re-scan the QR code. After a server restart this is required, because the session code in the link changes.
+2. Re-scan the QR code. After a server restart this is required, because the session code in the link changes. Guests need to scan the new **Guests** code too.
 3. Check same Wi-Fi.
 
 If Wi-Fi blocks the phone:

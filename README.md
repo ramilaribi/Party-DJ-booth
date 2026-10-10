@@ -5,7 +5,7 @@ Party DJ Booth is a local web app for a house party setup:
 - Your Mac is the main music player and visual booth.
 - Your phone is the DJ remote, paired by scanning a QR code.
 - Your playlist stays local on the Mac.
-- Friends can use the phone view to vote or cue songs if you let them hold the remote.
+- Guests scan their own QR code to vote for songs and send requests, without getting control of the booth.
 
 The app does not upload your music anywhere. The browser reads the audio files you choose during the session. Search downloads are saved locally on the Mac from open audio sources.
 
@@ -35,6 +35,8 @@ On the Mac screen, choose your audio files or a music folder. Then scan the QR c
 
 The QR link carries a session code that pairs your phone with the booth. The code changes every time the server starts, so scan the QR code again after a restart.
 
+The QR card has two codes: **DJ remote** for you, with full control, and **Guests** for everyone else, who can only vote and ask for songs. See [Guests: Votes And Requests](#guests-votes-and-requests).
+
 > **Important:** press Play on the Mac once after loading music. Browsers require one local click before a page can play audio. After that, the phone remote can control the booth.
 
 ## What You Get
@@ -54,7 +56,8 @@ The Mac booth has:
 - Energy control and an Auto DJ that plays every track before repeating.
 - Queue with Play now, Play next, voting, and energy tagging.
 - A Sound check that walks you through setup before guests arrive.
-- QR code for phone pairing.
+- Two QR codes: the DJ remote (full control) and a guest pass (vote and request only), with a full-screen guest code for a TV.
+- A song request inbox that collects guests' requests and spots songs already in your queue.
 
 The phone remote has:
 
@@ -66,6 +69,12 @@ The phone remote has:
 - Volume, energy, and crossfade sliders, and the transition style.
 - Live now-playing progress.
 - Queue browsing with Play now, Play next, and Vote.
+
+The guest view has:
+
+- Now playing, with progress.
+- The queue, with one **Vote** per song (tap again to take it back).
+- A box to ask the DJ for a song, when requests are on.
 
 ## Best Weekend Setup
 
@@ -80,6 +89,7 @@ The phone remote has:
 9. Press **Sound check** (under the QR code) and work through anything that isn't green.
 10. Put the Mac browser in full screen.
 11. Use the phone as the booth controller.
+12. Let guests scan the **Guests** QR code. The card switches to it by itself once your phone is paired. Press **Show big for guests** to fill the screen with it.
 
 For a full checklist, see [docs/WEEKEND_RUNBOOK.md](docs/WEEKEND_RUNBOOK.md).
 
@@ -95,6 +105,28 @@ The **Sound check** button under the QR code counts what's left to do, and opens
 - **Mac:** it stays awake, and notifications are off.
 
 Each row turns green on its own when it's true, and most have a one-click fix: **Unlock audio**, **Set to 80%**, **Show the QR code**, **Mix next**, **Talk**, and **Keep awake**. Keep awake uses the browser's screen wake lock, so the Mac won't sleep while the booth is open. The two rows you confirm yourself (transitions and notifications) stay checked for the rest of the day.
+
+## Guests: Votes And Requests
+
+Guests get their own QR code. They can join the party from their phones without being able to skip songs or touch the volume.
+
+**Sharing it:** pick the **Guests** tab on the QR card. Once your own phone is paired, the card switches to Guests by itself, so the code with full control isn't left on screen. **Show big for guests** fills the screen with the guest code, for a TV or projector. Guests must be on the same Wi-Fi as the Mac.
+
+**What guests can do:**
+
+- See what's playing and browse the queue.
+- **Vote** for songs. Each phone gets one vote per song, and tapping **Voted** takes it back. Votes help a song come up sooner when Auto DJ picks the next one.
+- **Ask for a song** by typing it, when requests are on.
+
+Everything else (play, pause, next, previous, hype, volume, energy, crossfade, transitions, search, and downloads) is refused by the server, not just hidden.
+
+**Requests** land in the **Song requests** card on the Mac, most-asked first. The same song typed two ways ("Blinding Lights - The Weeknd", "can you play blinding lights please") counts as one request with more guests behind it. When a request matches a song already in your queue, the row says so and offers **Play next**. **Search** puts the request into Find Music (YouTube when it's set up), and **Done** clears it. Turn off **Take song requests** to hide the request box on guests' phones. They can still vote.
+
+Guests' words stay in your request list: other phones and the stage only see "New song request (3 waiting)".
+
+**Limits:** each guest phone can send 30 vote taps and 3 requests a minute. A phone is recognized by its network address, so it gets one vote per song however many browser tabs it opens.
+
+After a server restart, guests scan the new guest code, just like your remote.
 
 For a working list of future party-experience improvements, see
 [docs/EXPERIENCE_UPGRADES.md](docs/EXPERIENCE_UPGRADES.md).
@@ -289,7 +321,7 @@ Try these checks:
 
 - Make sure phone and Mac are on the same Wi-Fi.
 - Use the exact phone link shown under the QR code. It includes the session code.
-- If the phone says **Scan the QR code again**, the server was restarted and the code changed. Scan the new QR code on the Mac.
+- If the phone says **Scan the QR code again**, the server was restarted and the code changed. Scan the new QR code on the Mac. Guests scan the new **Guests** code.
 - Keep the server terminal open.
 - If macOS asks about accepting network connections, allow it.
 - If hotel, venue, or guest Wi-Fi blocks device-to-device traffic, use a personal hotspot or your own router.
@@ -297,12 +329,13 @@ Try these checks:
 ## Network Safety
 
 - **Phones need the QR code.** The remote link carries a random session code. Devices on the Wi-Fi without it cannot control the booth, search, download, or read your downloaded files.
+- **Guests get a separate code.** The guest link carries a different random code that only allows voting and song requests. The server rebuilds every guest command from checked fields, limits how often each phone can send them, and delivers commands only to the booth, so phones never see each other's.
 - **The booth only runs on the Mac.** Open it at `http://localhost:4242`. Opening the booth from another device, or through the Mac's network address, shows **Open the booth on the Mac**.
 - **Only the booth sets what is playing.** Phones send commands such as Next or Vote, and the booth decides.
 - **Other websites are shut out.** A web page open in the Mac's browser cannot connect to the booth or read the session code.
 - **Your YouTube key stays on the Mac.** Phones and the booth page search through the server, so the key never reaches a browser.
 
-Anyone you give the QR code or link to can control the booth until the server restarts. Run the booth on your own network or a personal hotspot, not on shared public Wi-Fi.
+Anyone with the **DJ remote** QR code or link can control the booth until the server restarts, so give guests the **Guests** code instead. Run the booth on your own network or a personal hotspot, not on shared public Wi-Fi.
 
 ## Development
 

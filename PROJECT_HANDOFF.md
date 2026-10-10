@@ -42,7 +42,7 @@ Built and verified:
 
 - Local web server with Express.
 - Socket.IO realtime sync between Mac and phone.
-- QR code for phone remote pairing.
+- QR codes for the DJ remote and for guests (vote and request only).
 - Local file and folder audio import.
 - Browser audio playback with two-deck crossfade.
 - Canvas visualizer.
@@ -111,6 +111,8 @@ Found in the 2026-10-09 code review and not fixed yet, most important first:
 12. **BPM detection assumes a steady tempo.** Songs with tempo changes, live drums, or no clear kick may get a wrong BPM or "no steady beat". Beat matching then lands off-beat, or is skipped.
 13. **Manual mix keeps matched tempos.** After Sync or an automatic fade in Manual mix, the deck stays at the matched tempo; only Auto mix eases back. A long Manual mix session can drift away from the songs' original tempos.
 14. **Two videos share the stage during a mix.** Each YouTube player must stay visible while it plays, so the stage splits into two smaller videos for the length of a YouTube-to-YouTube transition.
+15. **Guest votes are counted per network address.** Phones that reach the Mac through one shared address (rare on home Wi-Fi, possible on some venue networks) share one vote per song.
+16. **Song requests only show on the Mac.** The DJ's phone doesn't list guests' requests yet.
 
 ## Important Boundary
 
@@ -181,7 +183,7 @@ Local manifest for downloaded tracks. It is ignored by git.
 
 ## Phone App / QR Download Idea
 
-The current QR code opens the phone remote in the browser. It is not a native phone app yet.
+The QR codes open the phone remote and the guest page in the browser. Neither is a native phone app yet.
 
 The best next step is to make the phone remote a PWA, not a native app. A PWA can be opened from a QR code and installed to the phone home screen:
 
@@ -314,7 +316,18 @@ How it was verified: 72 unit tests (new "play X next" phrases). In the booth: th
 
 Not verified yet: Keep awake on a real Mac (the screen wake lock needs a visible page), and Play next from a real phone.
 
-What's next is open. Options: loops (new playback engine), waveforms, MIDI controller support, mixer controls on the phone, French voice commands, and a hands-free wake word.
+**Done on 2026-10-10: backlog item 3, Guest Vote QR.**
+
+- **Two codes:** a second random code for guests, new on every server start. The QR card has **DJ remote** and **Guests** tabs and switches to Guests by itself once the DJ's phone is paired. **Show big for guests** opens a full-screen guest code. The terminal prints the guest link too.
+- **Guest page** (`/?guest=1&session=<guest code>`): now playing, the queue with one Vote per song (tap again to take it back), and a request box. No transport, sliders, voice, or search.
+- **Server-side permissions:** the guest code only works with the `guest` role and opens no API route. `guestCommand()` lets through only vote, unvote, and request, rebuilds them from checked fields, stamps `role` and `voter` (the phone's address) last, and limits each address to 30 vote taps and 3 requests a minute. Commands now go only to the booth (`booth` room), so phones never receive each other's commands, and `download:ready` goes only to the booth too.
+- **Booth:** one guest vote per song per phone (`track.voters`), and a **Song requests** card that merges duplicates (`requestKey()` in `voice.js`), flags requests already in the queue with **Play next**, offers **Search** and **Done**, and has a **Take song requests** switch. Guests' words stay on the booth; the shared status line only counts them.
+
+How it was verified: 73 unit tests (new request-key test). A scripted test (35 checks) against a scratch copy of the server: guests with the right code connect; no code, a wrong code, the guest code as DJ or booth, and the DJ code as guest are refused; the guest code gets 403 from every API route and `/music`; 13 kinds of DJ command from a guest never reach the booth; a vote that claims `role: "remote"` and a fake voter arrives as a guest with the real address; bad track ids and one-letter requests are dropped; request text is cleaned and capped at 100 characters; the 3-request and 30-vote limits hold, with a notice to the phone; DJ commands still work and are stamped as DJ; phones receive no commands; `null` and string commands don't crash the server. The earlier 16-check security test still passes. In the browser: the guest view (DJ-only cards hidden, Vote only); a vote showing on both screens; a second vote from the same phone ignored and Voted taking it back; three requests merging into two, one matched to the queue, whose Play next gave it "Up next" on the guest's phone; the request limit message; the requests switch hiding the guest's request box; a DJ phone joining and the card switching to Guests; the big guest code; no horizontal scroll at phone width; no console errors.
+
+Not verified yet: real phones on Wi-Fi (the in-app browser reached the scratch server at `localhost`, so every test guest had the same address).
+
+Next in the backlog: item 4, Better Phone Remote.
 
 For the current experience-upgrade backlog, see [docs/EXPERIENCE_UPGRADES.md](docs/EXPERIENCE_UPGRADES.md). Suggested order:
 
@@ -393,7 +406,6 @@ Do not run this unless the `brama` group exists and is the intended team group.
 - Should the GitHub repository stay public, or become private for the Brama team?
 - Is `Brama` an actual macOS group, a company/team name, or a project label?
 - Should the future PWA be named `Brama Booth`, `Party DJ Booth`, or something more personal?
-- Should guests ever get a vote-only page separate from the DJ remote?
 
 ## Handoff Note
 
