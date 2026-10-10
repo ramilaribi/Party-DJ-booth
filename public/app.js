@@ -79,6 +79,10 @@ const els = {
   remoteRequests: document.querySelector("#remote-requests"),
   remoteRequestsCount: document.querySelector("#remote-requests-count"),
   remoteRequestsList: document.querySelector("#remote-requests-list"),
+  recoverBtn: document.querySelector("#recover-btn"),
+  recoverStatus: document.querySelector("#recover-status"),
+  remoteRecoverBtn: document.querySelector("#remote-recover-btn"),
+  remoteRecoverStatus: document.querySelector("#remote-recover-status"),
   searchSections: document.querySelectorAll(".music-search"),
   stage: document.querySelector(".stage"),
   youtubeStage: document.querySelector("#youtube-stage"),
@@ -169,6 +173,10 @@ let masterGain;
 let youtubeApi = null;
 let recognition = null;
 let isTransitioning = false;
+let transitionStartedAt = 0;
+// Get music back: whether it's running, and the watchdog's view of the live deck's clock.
+let recovering = false;
+const playbackWatch = { time: 0, movedAt: 0, stuck: false };
 let pendingCue = null;
 let crossfaderTimer = 0;
 let manualBusy = false;
@@ -224,6 +232,8 @@ const booth = {
   upNext: [],
   // What the booth will play next, for the phone's "Next" line.
   nextTrackId: null,
+  // What the last Get music back found and did, numbered so phones can tell a new report apart.
+  recovery: { id: 0, text: "" },
   // Guests' song requests, newest first. The booth and DJ phones see them, guests don't.
   requests: [],
   guestRequests: settings.guestRequests ?? true,
@@ -257,12 +267,14 @@ function boot() {
     buildMixer();
     bindSoundCheck();
     bindGuestTools();
+    bindRecovery();
     fetchSession();
     loadDownloadedTracks();
     applySettingsToInputs();
     drawVisualizer();
     renderDisplay();
     window.setInterval(syncFromDisplay, 700);
+    window.setInterval(watchPlayback, 1000);
   }
 }
 
@@ -568,6 +580,15 @@ function bindRemoteControls() {
   els.remoteTransition.addEventListener("change", () => {
     sendCommand({ type: "setTransition", value: els.remoteTransition.value });
   });
+
+  els.remoteRecoverBtn.addEventListener("click", () => {
+    if (!sendCommand({ type: "recover" })) return;
+    acknowledge(els.remoteRecoverBtn);
+    // Show this until the booth sends a newer report than the one the phone has now.
+    els.remoteRecoverStatus.dataset.waitingFor = String(remoteState.recovery?.id || 0);
+    els.remoteRecoverStatus.hidden = false;
+    els.remoteRecoverStatus.textContent = "Asked the booth to get the music back…";
+  });
 }
 
 // While a finger is on a slider, and for a moment after it lifts, the booth's state still carries
@@ -696,6 +717,7 @@ function handleRemoteCommand(command) {
   }
 
   if (command.type === "playPause") togglePlay();
+  if (command.type === "recover") recoverMusic();
   if (command.type === "next") nextTrack(true);
   if (command.type === "previous") previousTrack();
   if (command.type === "hype") hypeMoment();
@@ -875,6 +897,8 @@ async function runVoiceCommand(text) {
   } else if (command.action === "hype") {
     hypeMoment();
     result = "hype!";
+  } else if (command.action === "recover") {
+    result = await recoverMusic();
   } else if (command.action === "crossfade") {
     setCrossfade(command.value);
     result = `crossfade ${booth.crossfade}s`;
@@ -1218,7 +1242,10 @@ async function playActive() {
     booth.message = "Booth is playing";
   } catch (error) {
     booth.playing = false;
-    booth.message = error?.boothMessage || "Press Play on the Mac once to unlock audio";
+    // Only a refusal from the browser means audio is locked; anything else is the song itself.
+    if (error?.boothMessage) booth.message = error.boothMessage;
+    else if (error?.name === "NotAllowedError") booth.message = "Press Play on the Mac once to unlock audio";
+    else booth.message = `Couldn't play ${booth.tracks[booth.currentIndex]?.title || "this song"}. Press Get music back to skip it.`;
   }
 }
 
@@ -1268,6 +1295,7 @@ async function loadTrack(index, shouldPlay, useFade) {
 
   await setupAudio();
   isTransitioning = true;
+  transitionStartedAt = Date.now();
   let failed = false;
 
   try {
@@ -1593,6 +1621,8 @@ function createDeck(label, el, slot) {
   let fadeTimer = 0;
   let progressTimer = 0;
   let startWaiter = null;
+  // Where a reloaded YouTube video picks up again, in seconds.
+  let startAt = 0;
 
   function ensurePlayer() {
     if (!playerReady) {
@@ -1625,6 +1655,25 @@ function createDeck(label, el, slot) {
       });
     }
     return playerReady;
+  }
+
+  // Throw this deck's YouTube player away, for one that stopped responding. The next load builds
+  // a new one in a fresh host element (destroy() takes the player's element with it).
+  function resetPlayer() {
+    window.clearInterval(fadeTimer);
+    window.clearInterval(progressTimer);
+    settleStart(new Error("reset"));
+    try {
+      player?.destroy();
+    } catch {
+      // A broken player may fail to destroy itself; the new host element replaces it anyway.
+    }
+    player = null;
+    playerReady = null;
+    document.getElementById(hostId)?.remove();
+    const host = document.createElement("div");
+    host.id = hostId;
+    slot.append(host);
   }
 
   function settleStart(error) {
@@ -1747,6 +1796,58 @@ function createDeck(label, el, slot) {
       if (deck.kind === "youtube") return player?.getDuration?.() || 0;
       return Number.isFinite(el.duration) ? el.duration : 0;
     },
+    // For Get music back: the file engine hit a decode or network error.
+    get broken() {
+      return deck.kind === "audio" && Boolean(el.error);
+    },
+    get youtubeState() {
+      return deck.kind === "youtube" ? player?.getPlayerState?.() ?? null : null;
+    },
+    // Start the same song again from where it was: a fresh file load, or a brand-new YouTube player.
+    async reload() {
+      const track = deck.track;
+      if (!track) return;
+      const at = deck.currentTime;
+      if (deck.kind === "youtube") resetPlayer();
+      await deck.load(track);
+
+      if (deck.kind === "youtube") {
+        startAt = at;
+      } else if (at > 0) {
+        await new Promise((resolve) => {
+          el.addEventListener("loadedmetadata", resolve, { once: true });
+          window.setTimeout(resolve, 5000);
+        });
+        el.currentTime = at;
+      }
+    },
+    // Put the deck's sound back to its own settings: fader level, EQ, filter, no echo, its tempo.
+    // A transition that broke off halfway can leave any of them changed. Says whether one was off.
+    resetChain() {
+      const level = levelFor(deck);
+      const off = (deck.kind === "audio" && deck.gain && Math.abs(deck.gain.gain.value - level) > 0.05)
+        || (deck.kind === "youtube" && Math.abs(youtubeLevel - level) > 0.05)
+        || Object.entries(deck.eqNodes || {}).some(([band, node]) => Math.abs(node.gain.value - deck.eq[band]) > 0.5)
+        || (deck.echo?.send.gain.value || 0) > 0.01
+        || (deck.kind === "audio" && Math.abs(el.playbackRate - deck.rate) > 0.01);
+
+      deck.setLevel(level);
+      Object.entries(deck.eqNodes || {}).forEach(([band, node]) => {
+        node.gain.cancelScheduledValues(0);
+        node.gain.value = deck.eq[band];
+      });
+      if (deck.filter) {
+        deck.filter.frequency.cancelScheduledValues(0);
+        applyFilter(deck.filter, deck.filterValue);
+      }
+      if (deck.echo) {
+        deck.echo.send.gain.cancelScheduledValues(0);
+        deck.echo.send.gain.value = 0;
+      }
+      deck.applyRate(deck.rate);
+      deck.setKeyLock(deck.keyLock);
+      return off;
+    },
     async load(track) {
       if (track.kind === "youtube") {
         await ensurePlayer();
@@ -1756,6 +1857,7 @@ function createDeck(label, el, slot) {
         lastError = null;
         needsStart = true;
         wantsPlay = false;
+        startAt = 0;
         showVideo(true);
       } else {
         stopYouTube();
@@ -1799,8 +1901,9 @@ function createDeck(label, el, slot) {
             }, 10000);
             startWaiter = { resolve, reject, timer };
             // A new video starts with loadVideoById; playVideo only resumes a paused one.
-            if (needsStart) player.loadVideoById(deck.track.videoId);
+            if (needsStart) player.loadVideoById({ videoId: deck.track.videoId, startSeconds: startAt });
             else player.playVideo();
+            startAt = 0;
           });
         } catch (error) {
           wantsPlay = false;
@@ -2425,6 +2528,234 @@ function renderPlatter(deck, parts) {
   const videoId = deck.kind === "youtube" ? deck.track?.videoId : null;
   platterLabel.style.backgroundImage = videoId ? `url("https://i.ytimg.com/vi/${videoId}/mqdefault.jpg")` : "";
   platterLabel.classList.toggle("has-art", Boolean(videoId));
+}
+
+// --- Get music back ---------------------------------------------------------------------------
+
+function bindRecovery() {
+  els.recoverBtn.addEventListener("click", () => recoverMusic());
+}
+
+// One button for "the music stopped". It fixes what the booth can fix by itself, in order, and
+// reports what it did, or the one thing a person has to do. Safe to press while music plays: it
+// only changes what's actually wrong.
+async function recoverMusic() {
+  if (recovering) return "already checking";
+  recovering = true;
+  els.recoverBtn.disabled = true;
+  els.recoverBtn.textContent = "Checking…";
+  const fixed = [];
+  let todo = "";
+
+  try {
+    todo = await runRecovery(fixed);
+  } catch (error) {
+    todo = error?.boothMessage || "Something went wrong. Reload the booth page, then load the music again.";
+  } finally {
+    recovering = false;
+    els.recoverBtn.disabled = false;
+    els.recoverBtn.textContent = "Get music back";
+  }
+
+  let report;
+  if (todo) report = `${fixed.length ? `Fixed: ${fixed.join(", ")}. ` : ""}${todo}`;
+  else if (fixed.length) report = `Music back: ${fixed.join(", ")}.`;
+  else report = "The booth is playing fine. Still silent? Check the Mac's volume, and that the speakers are connected and chosen in System Settings > Sound.";
+
+  booth.recovery = { id: booth.recovery.id + 1, text: report };
+  booth.message = report;
+  playbackWatch.stuck = false;
+  playbackWatch.movedAt = Date.now();
+  els.recoverBtn.classList.remove("is-urgent");
+  els.recoverStatus.hidden = false;
+  els.recoverStatus.textContent = report;
+  renderDisplay();
+  syncFromDisplay(true);
+  return report;
+}
+
+async function runRecovery(fixed) {
+  if (!booth.tracks.length) return "Load music first: choose a folder or search for songs.";
+
+  // 1. The browser must allow sound. A click on the Mac always does; a phone or voice command
+  // only can if the booth page was clicked earlier.
+  const wasRunning = audioContext?.state === "running";
+  try {
+    await withTimeout(setupAudio(), 3, "");
+  } catch {
+    // Still suspended: handled just below.
+  }
+  if (audioContext?.state !== "running") {
+    return "The browser is blocking sound. Click anywhere on the booth page on the Mac, then press Get music back.";
+  }
+  if (!wasRunning) fixed.push("unlocked audio");
+
+  // 2. Let a running transition finish, and clear one that never did.
+  if (isTransitioning) {
+    const limit = transitionStartedAt + (booth.crossfade + 10) * 1000;
+    while (isTransitioning && Date.now() < limit) await wait(0.25);
+    if (isTransitioning) {
+      isTransitioning = false;
+      fixed.push("cleared a stuck transition");
+    }
+  }
+
+  // 3. Volume, and the master gain under it (an interrupted fade can leave automation behind).
+  if (booth.volume < 10) {
+    setVolume(booth.mutedVolume || 80);
+    fixed.push(`turned the volume up to ${booth.volume}%`);
+  }
+  masterGain.gain.cancelScheduledValues(0);
+  masterGain.gain.value = booth.volume / 100;
+
+  // 4. A song on the deck the room hears.
+  if (booth.mixMode === "manual") activeDeck = liveDeck();
+  const deck = activeDeck;
+  if (!booth.tracks[booth.currentIndex]) {
+    booth.currentIndex = 0;
+    rememberPlay(booth.tracks[0]);
+  }
+  const track = booth.tracks[booth.currentIndex];
+  if (deck.track !== track) await deck.load(track);
+
+  // 5. In Auto mix only the live deck should sound.
+  const other = otherDeck(deck);
+  if (booth.mixMode === "auto" && other.loaded) {
+    other.stop();
+    fixed.push(`stopped a leftover deck ${other.label}`);
+  }
+
+  // 6. Effects a broken transition left behind. Before the crossfader below, which glides the
+  // level and would look like one more thing to reset.
+  if (deck.resetChain()) fixed.push(`reset deck ${deck.label}'s level and effects`);
+  if (booth.mixMode === "manual" && levelFor(deck) < 0.5) {
+    setCrossfader(deck === decks[0] ? 0 : 1);
+    fixed.push(`moved the crossfader to deck ${deck.label}`);
+  }
+
+  // 7. A song YouTube refused, or a file the browser can't read: go to the next one.
+  if (track.unplayable || deck.broken) return skipDeadSong(deck, track, fixed);
+
+  // 8. Play, then make sure the song is really moving.
+  const wasMoving = deck.playing && !playbackWatch.stuck;
+  if (!wasMoving) {
+    if (playbackWatch.stuck) {
+      await deck.reload();
+      fixed.push(`restarted ${track.title} where it was`);
+    }
+    const problem = await startDeck(deck);
+    if (problem) return problem;
+    booth.playing = true;
+    if (!playbackWatch.stuck) fixed.push(`started ${track.title}`);
+  }
+
+  if (await isMoving(deck)) return "";
+
+  // Not moving. YouTube may just be slow, or blocked in a hidden window.
+  if (deck.kind === "youtube" && deck.youtubeState === youtubeStates.buffering) {
+    return "YouTube is still loading this video. Check the internet connection; it starts by itself once it loads.";
+  }
+  if (deck.kind === "youtube" && document.visibilityState !== "visible") {
+    return "Bring the booth window to the front on the Mac. YouTube won't start in a hidden window.";
+  }
+
+  // One fresh start, then give up on this song.
+  await deck.reload();
+  const problem = await startDeck(deck);
+  if (!problem && await isMoving(deck)) {
+    fixed.push(`restarted ${track.title}`);
+    return "";
+  }
+  return skipDeadSong(deck, track, fixed);
+}
+
+// Play a deck, turning the browser's refusals into a next step. Returns "" when it started.
+async function startDeck(deck) {
+  try {
+    await deck.play();
+    return "";
+  } catch (error) {
+    if (error?.name === "NotAllowedError") {
+      return "The browser is blocking playback. Click anywhere on the booth page on the Mac, then press Get music back.";
+    }
+    if (deck.track?.unplayable) return "";
+    return error?.boothMessage || `Couldn't play ${deck.track?.title || "this song"}.`;
+  }
+}
+
+async function isMoving(deck) {
+  const before = deck.currentTime;
+  await wait(2);
+  return deck.currentTime > before + 0.4;
+}
+
+async function skipDeadSong(deck, track, fixed) {
+  // Auto DJ leaves it out from now on.
+  track.unplayable = true;
+  const index = chooseNextIndex();
+  if (index < 0 || index === booth.currentIndex) {
+    return `${track.title} won't play, and there's nothing else to play. Load more music.`;
+  }
+
+  const next = booth.tracks[index];
+  if (booth.mixMode === "manual") {
+    await loadIntoDeck(deck, index);
+    const problem = await startDeck(deck);
+    if (problem) return problem;
+    booth.playing = true;
+  } else {
+    await loadTrack(index, true, false);
+    if (!booth.playing) return booth.message;
+  }
+  fixed.push(`skipped ${track.title} (it wouldn't play) for ${next.title}`);
+  return "";
+}
+
+// Spot a song that stopped moving while the booth thinks it's playing (a stalled stream, a deck
+// the system paused, a stuck YouTube video) and point at Get music back. It never acts by itself.
+function watchPlayback() {
+  const now = Date.now();
+  const time = activeDeck.currentTime;
+  const moved = Math.abs(time - playbackWatch.time) > 0.05;
+  playbackWatch.time = time;
+
+  if (moved || !booth.playing || isTransitioning || recovering || !activeDeck.loaded) {
+    playbackWatch.movedAt = now;
+    if (playbackWatch.stuck) showStuck(false);
+    return;
+  }
+
+  // YouTube gets longer, because an ad holds the video's clock still.
+  const limit = activeDeck.kind === "youtube" ? 20000 : 6000;
+  if (!playbackWatch.stuck && now - playbackWatch.movedAt > limit) showStuck(true);
+}
+
+function showStuck(stuck) {
+  playbackWatch.stuck = stuck;
+  els.recoverBtn.classList.toggle("is-urgent", stuck);
+  if (stuck) {
+    booth.message = "The music seems stuck. Press Get music back.";
+    els.recoverStatus.hidden = false;
+    els.recoverStatus.textContent = booth.message;
+  }
+  renderDisplay();
+  syncFromDisplay(true);
+}
+
+function renderRemoteRecovery() {
+  if (isGuest) return;
+  const status = els.remoteRecoverStatus;
+  const report = remoteState.recovery || {};
+  const stuck = Boolean(remoteState.musicStuck);
+  els.remoteRecoverBtn.classList.toggle("is-urgent", stuck);
+
+  if (status.dataset.waitingFor !== undefined) {
+    if ((report.id || 0) <= Number(status.dataset.waitingFor)) return;
+    delete status.dataset.waitingFor;
+  }
+  const text = stuck ? "The booth says the music seems stuck. Tap Get music back." : report.text ? `Last check: ${report.text}` : "";
+  status.hidden = !text;
+  status.textContent = text;
 }
 
 // --- Guests ------------------------------------------------------------------------------------
@@ -3383,6 +3714,7 @@ function renderRemote() {
   const art = current?.videoId ? `url("https://i.ytimg.com/vi/${current.videoId}/mqdefault.jpg")` : "";
 
   renderConnection();
+  renderRemoteRecovery();
   els.phoneNow.classList.toggle("has-art", Boolean(art));
   els.phoneNow.style.setProperty("--art", art || "none");
   els.remoteNext.hidden = !next || next === current;
@@ -3522,6 +3854,8 @@ function syncFromDisplay(force = false) {
     guestRequests: booth.guestRequests,
     youtubeSearch: sessionInfo.youtubeSearch,
     nextTrackId: booth.nextTrackId,
+    recovery: booth.recovery,
+    musicStuck: playbackWatch.stuck,
     message: booth.message,
   });
 }

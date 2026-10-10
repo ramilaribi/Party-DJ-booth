@@ -3,6 +3,12 @@ import { test } from "node:test";
 import { findQueuedTrack, matchScore, normalizeSpeech, parseVoiceCommand, requestKey } from "../public/voice.js";
 
 const cases = [
+  ["get the music back", { action: "recover" }],
+  ["DJ, bring the sound back please", { action: "recover" }],
+  ["fix the audio", { action: "recover" }],
+  ["there's no sound", { action: "recover" }],
+  ["the music stopped", { action: "recover" }],
+  ["recover", { action: "recover" }],
   ["next", { action: "next" }],
   ["Next song, please!", { action: "next" }],
   ["skip this one", { action: "next" }],

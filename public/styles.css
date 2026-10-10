@@ -1088,6 +1088,45 @@ input[type="range"] {
   color: var(--teal);
 }
 
+.recover {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.recover-button {
+  width: 100%;
+  border-color: rgba(255, 178, 46, 0.6);
+  color: var(--amber);
+}
+
+.recover-button:disabled {
+  opacity: 0.6;
+}
+
+/* The watchdog thinks the music is stuck: make the way out hard to miss. */
+.recover-button.is-urgent {
+  border-color: var(--pink);
+  background: rgba(255, 62, 127, 0.18);
+  color: #fff;
+  animation: recover-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes recover-pulse {
+  50% {
+    box-shadow: 0 0 0 0.45rem rgba(255, 62, 127, 0.25);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recover-button.is-urgent {
+    animation: none;
+  }
+}
+
+.recover-status {
+  margin: 0;
+}
+
 .requests-card {
   display: grid;
   gap: 0.8rem;
@@ -1559,6 +1598,7 @@ body.hype {
   }
 
   .deck-controls,
+  .recover,
   .sliders {
     grid-column: 1 / -1;
   }

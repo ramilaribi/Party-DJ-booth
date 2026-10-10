@@ -107,6 +107,11 @@
               <button id="hype-btn" class="hype-button" aria-label="Hype moment">Hype</button>
             </div>
 
+            <div class="recover">
+              <button id="recover-btn" class="queue-action recover-button" type="button">Get music back</button>
+              <p id="recover-status" class="search-status recover-status" role="status" aria-live="polite" hidden></p>
+            </div>
+
             <div class="card sliders control-card">
               <label>
                 <span>Master volume</span>
@@ -350,6 +355,11 @@
               <button type="button" class="energy-preset" data-energy="60" aria-pressed="false">Groove</button>
               <button type="button" class="energy-preset" data-energy="86" aria-pressed="false">Peak</button>
             </div>
+          </div>
+
+          <div class="recover" data-dj-only>
+            <button id="remote-recover-btn" class="queue-action recover-button" type="button">Get music back</button>
+            <p id="remote-recover-status" class="search-status recover-status" role="status" aria-live="polite" hidden></p>
           </div>
 
           <div id="remote-requests" class="remote-card" data-dj-only hidden>

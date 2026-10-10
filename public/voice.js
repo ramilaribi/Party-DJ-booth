@@ -7,6 +7,7 @@ const politeEnding = /\s+(?:please|now|thanks|thank you)$/;
 const modeEnergy = { afterglow: 15, warmup: 38, groove: 60, peak: 86 };
 
 const patterns = [
+  [/^(?:(?:get|bring) (?:the )?(?:music|sound) back|fix (?:the )?(?:music|sound|audio)|recover(?: (?:the )?(?:music|sound|audio))?|(?:theres |there is )?no (?:sound|music)|(?:the )?(?:music|sound) (?:stopped|is stuck|died|cut out))$/, () => ({ action: "recover" })],
   [/^(?:next|skip)(?: (?:song|track|one|it|this(?: one| song)?))?$/, () => ({ action: "next" })],
   [/^play (?:the )?next(?: song| track| one)?$|^play something (?:else|different)$/, () => ({ action: "next" })],
   [/^(?:previous|back|go back|last song|play (?:the )?(?:previous|last) (?:song|track|one))(?: song| track)?$/, () => ({ action: "previous" })],
