@@ -252,6 +252,24 @@ Phone: keyboard dictation -> voice box -> remote:command {type: "voice", text} -
 
 `soundChecks()` builds the checklist from state the booth already has: the socket, `audioContext.state`, the queue, the master volume, the phone count from `presence`, `sessionInfo` flags (YouTube search on from `/api/session`, a YouTube player reaching PLAYING, a voice command parsed), the screen wake lock (`navigator.wakeLock`, taken again on `visibilitychange` because browsers release it when the page hides), and day-stamped confirmations in local storage. `renderSoundCheck()` runs with every booth render and keeps the button's "n to do" count current.
 
+## Get Music Back
+
+`recoverMusic()` runs `runRecovery()` and turns what it did into one report. The steps only touch what's wrong:
+
+1. `setupAudio()` with a 3-second timeout, because `AudioContext.resume()` never settles while the browser refuses. Still not `running`: stop and ask for a click on the booth page.
+2. A running transition gets until `transitionStartedAt + crossfade + 10 s` to finish. After that `isTransitioning` is cleared.
+3. A master volume under 10% goes back up, and the master gain's scheduled values are cancelled.
+4. The live deck (`liveDeck()` in Manual mix) gets the current track if it lost it. In Auto mix a loaded second deck is stopped.
+5. `deck.resetChain()` puts the fader, EQ, filter, echo send, rate, and key lock back to the deck's own settings, and says whether any were off. In Manual mix the crossfader then moves to the live deck if it was muting it.
+6. Tracks marked `unplayable`, and files with a media error (`deck.broken`), are skipped with `skipDeadSong()`. It marks the track unplayable and loads `chooseNextIndex()` without a fade.
+7. A deck that isn't playing, or that the watchdog flagged as stuck, is started; a stuck one first goes through `deck.reload()`. That reloads the file and seeks back, or throws the YouTube player away (`resetPlayer()`) and starts the video at the same second with `loadVideoById({ startSeconds })`. `isMoving()` then watches the clock for 2 seconds. Still stuck: YouTube that's buffering or in a hidden window gets a message; anything else gets one more reload, then is skipped.
+
+`playActive()` now tells a locked browser (`NotAllowedError`) apart from a song it can't play, so the booth no longer asks for a click when the file is the problem.
+
+**Watchdog.** `watchPlayback()` runs every second on the booth. While `booth.playing` is true and no transition is running, a live deck whose clock hasn't moved for 6 seconds (20 for YouTube) sets `playbackWatch.stuck`. The button pulses, and the state carries `musicStuck` to phones. It doesn't act by itself.
+
+**Phones and voice.** The DJ phone sends `{ type: "recover" }`; guests can't (the server's guest whitelist drops it). Voice parses "get the music back", "fix the sound", "no sound", "the music stopped", and similar to `{ action: "recover" }`. The report goes out as `booth.recovery = { id, text }`. The id lets a phone keep "Asked the booth…" showing until a newer report arrives, even when the text is the same as last time.
+
 ## Guests
 
 **Commands.** `guestCommand()` in `server.js` drops anything that isn't `vote`, `unvote`, or `request`, and builds a new command from checked fields: a track id that looks like one, or request text with control and right-to-left override characters removed, capped at 100 characters. The server adds `role` and `voter` after everything else, so a command can't claim to come from the DJ or from another phone. The voter is the phone's network address. Each address gets 30 vote taps and 3 requests per sliding minute; past that, the phone gets a `guest:notice` and the command is dropped. Invalid commands are dropped before they count.
@@ -320,6 +338,7 @@ Playlist files are not stored permanently. You choose them again when you start 
 - Listens for voice commands and runs them (booth), or forwards them (phone).
 - Draws the visualizer.
 - Renders booth, remote, and guest screens, and the booth's song request list.
+- Runs Get music back and the stuck-song watchdog.
 - Syncs state over Socket.IO.
 
 `public/mixing.js`

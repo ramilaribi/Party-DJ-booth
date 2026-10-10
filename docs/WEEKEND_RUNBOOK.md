@@ -44,6 +44,7 @@ Check:
 - Crossfade works.
 - Crossfade still works with the booth hidden: put another window in front during a fade and listen for the next song coming in.
 - The QR code opens the remote.
+- Find **Get music back** on the Mac and the phone. Press it once while music plays: it should say the booth is playing fine.
 - A second phone scans the **Guests** code, can vote, and its song request shows up in **Song requests** on the Mac.
 - A YouTube song plays with sound, and crossfades in and out of one of your own files.
 - The Mixer shows a BPM for the playing song and the next one. A Next between two dance tracks should sound beat-matched.
@@ -83,9 +84,10 @@ If someone asks for a song you do not have, use Find Music. Open audio searches 
 
 If audio stops:
 
-1. Look at the Mac.
-2. Press Play on the Mac.
-3. If needed, refresh the Mac page and load the playlist again.
+1. Press **Get music back** on the Mac or your phone, and read what it says. If the button is pulsing, the booth already noticed the song stopped moving.
+2. If it asks you to click the booth page or bring the booth window to the front, do that, then press it again.
+3. If it says the booth is playing fine, the problem is outside the browser: check the Mac's volume, the speaker cable or Bluetooth, and System Settings > Sound > Output.
+4. Last resort: refresh the Mac page and load the playlist again.
 
 If a YouTube song won't play:
 

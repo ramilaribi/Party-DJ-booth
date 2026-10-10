@@ -8,7 +8,7 @@ Use this as the working list for making Party DJ Booth more useful during a real
 2. Real Play Next (done 2026-10-10)
 3. Guest Vote QR (done 2026-10-10)
 4. Better Phone Remote (done 2026-10-10)
-5. Party Recovery Button
+5. Party Recovery Button (done 2026-10-10)
 6. PWA Install Mode
 7. Queue Sections
 8. Smart DJ Suggestions
@@ -119,6 +119,8 @@ Why it helps:
 - The phone is the main live-control surface once the Mac is in full screen.
 
 ## 5. Party Recovery Button
+
+**Status: done (2026-10-10).** Built as **Get music back** on the Mac, the phone, and voice, plus a watchdog that makes the button pulse when a song stops moving; see Get Music Back in the README.
 
 Add one obvious action for getting music back when something goes wrong.
 

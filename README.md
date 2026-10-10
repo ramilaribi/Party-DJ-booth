@@ -56,6 +56,7 @@ The Mac booth has:
 - Energy control and an Auto DJ that plays every track before repeating.
 - Queue with Play now, Play next, voting, and energy tagging.
 - A Sound check that walks you through setup before guests arrive.
+- A **Get music back** button that finds out why the music stopped and fixes it.
 - Two QR codes: the DJ remote (full control) and a guest pass (vote and request only), with a full-screen guest code for a TV.
 - A song request inbox that collects guests' requests and spots songs already in your queue.
 
@@ -72,6 +73,7 @@ The phone remote has:
 - Volume, energy, and crossfade sliders with big thumbs that stay where you put them while you drag, and the transition style.
 - Queue browsing with Play now, Play next, and Vote. The song that's playing is marked Now playing.
 - A banner when the phone can't control the booth, saying why (see [Phone Cannot Connect](#phone-cannot-connect)).
+- **Get music back**, which runs the booth's fix from your phone.
 
 The guest view has:
 
@@ -108,6 +110,20 @@ The **Sound check** button under the QR code counts what's left to do, and opens
 - **Mac:** it stays awake, and notifications are off.
 
 Each row turns green on its own when it's true, and most have a one-click fix: **Unlock audio**, **Set to 80%**, **Show the QR code**, **Mix next**, **Talk**, and **Keep awake**. Keep awake uses the browser's screen wake lock, so the Mac won't sleep while the booth is open. The two rows you confirm yourself (transitions and notifications) stay checked for the rest of the day.
+
+## Get Music Back
+
+When the room goes quiet, press **Get music back**. It's under Prev / Play / Next on the Mac, and under Now playing on your phone. Or say "get the music back". The booth checks, in order:
+
+1. **Sound is allowed.** Browsers block sound until the page is clicked. Pressing the button on the Mac unlocks it.
+2. **No mix is stuck halfway.** A running transition gets time to finish; one that never does is cleared.
+3. **Volume.** A master volume under 10% goes back up, to where it was before a mute, or 80%.
+4. **The right deck is up.** In Auto mix a leftover second deck is stopped. In Manual mix the crossfader moves to the deck that's playing. That deck's fader, EQ, filter, echo, and tempo go back to their settings.
+5. **The song plays and moves.** A paused song starts. A stuck one restarts where it was, on a fresh YouTube player for videos. A song that still won't play is skipped, and Auto DJ leaves it out from then on.
+
+Then it says what it fixed, or the one thing left for you, such as clicking the booth page or bringing the booth window to the front. If everything was fine, it says so and reminds you to check the Mac's volume and speakers, which a browser can't see. It only changes what's actually wrong, so it's safe to press while music plays.
+
+The booth also watches for a stuck song. If the music should be playing but hasn't moved for 6 seconds (20 for YouTube, because ads hold the video's clock still), the button pulses on the Mac and on your phone. It never fixes anything until someone presses it.
 
 ## Guests: Votes And Requests
 
@@ -216,6 +232,7 @@ You can also type any command in either box.
 | "play One More Time by Daft Punk" | Plays it now: from the queue if it's there, otherwise YouTube's top result |
 | "add Get Lucky to the queue" | Adds YouTube's top result to the queue |
 | "play Get Lucky next" | Puts it in Up next, from the queue or YouTube |
+| "get the music back", "fix the sound", "the music stopped" | [Get music back](#get-music-back) |
 
 Starting with "hey DJ" or ending with "please" is fine. Commands are in English, and the Mac listens in English whatever your system language is.
 

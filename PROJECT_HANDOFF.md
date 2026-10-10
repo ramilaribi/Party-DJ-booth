@@ -112,6 +112,7 @@ Found in the 2026-10-09 code review and not fixed yet, most important first:
 13. **Two videos share the stage during a mix.** Each YouTube player must stay visible while it plays, so the stage splits into two smaller videos for the length of a YouTube-to-YouTube transition.
 14. **Guest votes are counted per network address.** Phones that reach the Mac through one shared address (rare on home Wi-Fi, possible on some venue networks) share one vote per song.
 15. **Vibration is Android only.** iPhones don't support the Vibration API, so a tap there only flashes.
+16. **Get music back can't hear the room.** It checks everything inside the browser, but not the Mac's own volume, the output device, or the speakers. The watchdog notices a song whose clock stops, not one playing into a muted Mac.
 
 ## Important Boundary
 
@@ -339,7 +340,25 @@ How it was verified: 73 unit tests. A scripted test of the request list (9 check
 
 Not verified yet: a real iPhone and Android phone (touch drag on sliders, the safe-area bar, vibration).
 
-Next in the backlog: item 5, Party Recovery Button.
+**Done on 2026-10-10: backlog item 5, Party Recovery Button.**
+
+- **Get music back** on the Mac (under the transport), on the DJ phone (under Now playing), and by voice ("get the music back", "fix the sound", "the music stopped"). In order, it unlocks audio, lets a transition finish or clears a stuck one, and brings a near-zero volume back up. It then puts the right deck up (Auto mix: stop a leftover deck; Manual mix: move the crossfader) and resets that deck's fader and effects. Last, it starts or restarts the song, rebuilding the YouTube player when needed, and skips a song that won't play. It reports what it fixed, or the one step left for a person.
+- **Watchdog:** a song that should be playing but hasn't moved for 6 seconds (20 for YouTube) makes the button pulse on the Mac and phone. It doesn't act by itself.
+- **Clearer failure message:** a song the browser can't play no longer says "Press Play on the Mac once to unlock audio"; it says the song couldn't play and to press Get music back.
+
+How it was verified: 79 unit tests (6 new voice phrases). The 35 guest checks (now including `recover`, `requestPlayNext`, and `requestDone` from a guest), 9 request checks, and 16 security checks pass. On a scratch server with silent test songs:
+- the phone's button starting the booth ("unlocked audio, started Alpha");
+- volume at 0% coming back to 80% without restarting the song;
+- a song frozen at 24 seconds making both buttons pulse within 8 seconds, then the phone's press restarting it at the same second, and Auto DJ carrying on into the next song;
+- a corrupt file showing "Couldn't play Broken" and Get music back skipping it;
+- the voice phrase;
+- a press while everything was fine saying so without touching the song;
+- Manual mix with the crossfader on the silent side moving it back;
+- no console errors.
+
+Not verified yet: the "browser is blocking sound" path (the in-app browser allows autoplay, so audio was never locked), rebuilding a YouTube player that really got stuck, and the watchdog during a YouTube ad.
+
+Next in the backlog: item 6, PWA Install Mode.
 
 For the current experience-upgrade backlog, see [docs/EXPERIENCE_UPGRADES.md](docs/EXPERIENCE_UPGRADES.md). Suggested order:
 
