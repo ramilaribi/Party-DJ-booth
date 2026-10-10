@@ -217,7 +217,7 @@ The booth changes songs for you with your transition style. With **Beat match** 
 3. Press that deck's **Play**, and **Sync** to match its tempo and beats to the other deck.
 4. Move the **crossfader**, or press **Auto fade** to glide across over your crossfade time.
 
-Next, Cue, Play now, and voice song requests still work. They load the song on the free deck and fade over. With **Auto DJ flow** on, the booth also fades to the next song by itself if the live deck is about to end and the other deck isn't playing, so the music never stops.
+Next, Play now, Play next, and voice song requests still work. They load the song on the free deck and fade over. With **Auto DJ flow** on, the booth also fades to the next song by itself if the live deck is about to end and the other deck isn't playing, so the music never stops.
 
 ### Deck controls
 

@@ -97,21 +97,20 @@ Not verified yet:
 
 Found in the 2026-10-09 code review and not fixed yet, most important first:
 
-1. **Cue plays immediately.** It jumps to the song instead of queueing it next. The docs now describe this behavior; decide whether a real "play next" action is wanted.
-2. **Large libraries are slow.** Each imported file triggers a full queue re-render and a full playlist broadcast. The whole playlist is also resent every 700 ms.
-3. **Two booth tabs both play.** Every remote command reaches every open booth tab.
-4. **Remote sliders jump while dragging.** Incoming state resets the phone's slider values mid-drag.
-5. **Download leftovers.** A failed download leaves a `.download` temp file. Parallel downloads of the same file share one temp path.
-6. **Pairing ends when the server restarts.** The session code is regenerated on every start, so phones must scan the QR code again. This is safer, but an installed PWA would need a way to keep or renew pairing.
-7. **YouTube decks have no effects.** YouTube's audio never reaches Web Audio, so a YouTube deck has no EQ, filter, tempo, BPM, or beat matching, and transitions from it fall back to a crossfade.
-8. **No visualizer or EQ on YouTube tracks.** Their audio stays inside YouTube's cross-origin player and can't reach Web Audio.
-9. **A YouTube start can't be retried mid-transition.** A video that times out while starting is skipped for this round and retried in the next one.
-10. **Voice is push-to-talk and English only.** There's no always-listening wake word yet, and the parser only knows English phrases. French commands would need a second pattern set and a language switch for the recognizer.
-11. **Chrome's speech recognition is online.** It sends audio to Google's servers and needs internet. Safari uses on-device macOS Dictation when it's enabled.
-12. **No loops yet.** They need an `AudioBufferSourceNode` playback engine instead of `<audio>` elements.
-13. **BPM detection assumes a steady tempo.** Songs with tempo changes, live drums, or no clear kick may get a wrong BPM or "no steady beat". Beat matching then lands off-beat, or is skipped.
-14. **Manual mix keeps matched tempos.** After Sync or an automatic fade in Manual mix, the deck stays at the matched tempo; only Auto mix eases back. A long Manual mix session can drift away from the songs' original tempos.
-15. **Two videos share the stage during a mix.** Each YouTube player must stay visible while it plays, so the stage splits into two smaller videos for the length of a YouTube-to-YouTube transition.
+1. **Large libraries are slow.** Each imported file triggers a full queue re-render and a full playlist broadcast. The whole playlist is also resent every 700 ms.
+2. **Two booth tabs both play.** Every remote command reaches every open booth tab.
+3. **Remote sliders jump while dragging.** Incoming state resets the phone's slider values mid-drag.
+4. **Download leftovers.** A failed download leaves a `.download` temp file. Parallel downloads of the same file share one temp path.
+5. **Pairing ends when the server restarts.** The session code is regenerated on every start, so phones must scan the QR code again. This is safer, but an installed PWA would need a way to keep or renew pairing.
+6. **YouTube decks have no effects.** YouTube's audio never reaches Web Audio, so a YouTube deck has no EQ, filter, tempo, BPM, or beat matching, and transitions from it fall back to a crossfade.
+7. **No visualizer or EQ on YouTube tracks.** Their audio stays inside YouTube's cross-origin player and can't reach Web Audio.
+8. **A YouTube start can't be retried mid-transition.** A video that times out while starting is skipped for this round and retried in the next one.
+9. **Voice is push-to-talk and English only.** There's no always-listening wake word yet, and the parser only knows English phrases. French commands would need a second pattern set and a language switch for the recognizer.
+10. **Chrome's speech recognition is online.** It sends audio to Google's servers and needs internet. Safari uses on-device macOS Dictation when it's enabled.
+11. **No loops yet.** They need an `AudioBufferSourceNode` playback engine instead of `<audio>` elements.
+12. **BPM detection assumes a steady tempo.** Songs with tempo changes, live drums, or no clear kick may get a wrong BPM or "no steady beat". Beat matching then lands off-beat, or is skipped.
+13. **Manual mix keeps matched tempos.** After Sync or an automatic fade in Manual mix, the deck stays at the matched tempo; only Auto mix eases back. A long Manual mix session can drift away from the songs' original tempos.
+14. **Two videos share the stage during a mix.** Each YouTube player must stay visible while it plays, so the stage splits into two smaller videos for the length of a YouTube-to-YouTube transition.
 
 ## Important Boundary
 
@@ -226,7 +225,7 @@ The network-safety issues from the code review are fixed.
 - `/api/youtube/search` on the server, with the key read from `.env` (gitignored, mode 600) and pairing required.
 - Three decks with one interface: two audio decks and a YouTube deck, with a fade-out / fade-in dip for YouTube-to-YouTube. (Since replaced by two decks that each play files or YouTube; see the next entry.)
 - Find Music has an Open audio / YouTube switch on the Mac and the phone, with Play now and Add to queue.
-- Failure handling: player and start timeouts, refused videos skipped with a reason, Cue / Play now held until a running crossfade ends, and an ad-length guard for Auto DJ.
+- Failure handling: player and start timeouts, refused videos skipped with a reason, Play now held until a running crossfade ends, and an ad-length guard for Auto DJ.
 
 How it was verified:
 
@@ -267,7 +266,7 @@ Not verified yet: a real microphone (needs a person in the room), and phone keyb
 - **Each audio deck is a mixer channel:** 3-band EQ, a sweep filter, tempo ±8% with key lock, a hot cue, and Sync.
 - **BPM and beat grids** are detected in the browser (`public/mixing.js`) and saved per track.
 - **Auto mix** beat-matches crossfades when tempos are within 8% (half/double time included), then eases back to the song's own tempo.
-- **Manual mix** adds a crossfader, per-deck Play, A/B load buttons in the queue, Auto fade, and an Auto DJ safety net. Next, Cue, Play now, and voice requests still work by fading to the free deck.
+- **Manual mix** adds a crossfader, per-deck Play, A/B load buttons in the queue, Auto fade, and an Auto DJ safety net. Next, Play now, and voice requests still work by fading to the free deck.
 - **Voice:** "manual mix", "auto mix", and "fade".
 - **Loops were left out on purpose.** Media elements can't seek without a small gap, so loops need an `AudioBufferSourceNode` playback engine. See Future Upgrade Ideas in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

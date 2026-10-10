@@ -172,7 +172,7 @@ Each deck strip has a CSS vinyl platter. It spins at 33⅓ RPM (1.8 s per turn) 
 - **Player never gets ready** (no internet, blocked): `withTimeout` gives up after 20 seconds with a message, and the next attempt builds a fresh player.
 - **Video doesn't start within 10 seconds**: the transition fails. In an overlap, the old deck keeps playing, the failed deck is stopped, and the booth and Prev point back at the playing track. The failed track keeps its play count, so Auto DJ tries other songs before retrying it.
 - **YouTube refuses a video** (`onError`: removed, private, or not allowed outside YouTube): the track is marked `unplayable`, the booth shows why, and Auto DJ and Next skip it from then on.
-- **Cue or Play now during a crossfade**: kept in `pendingCue` and played as soon as the crossfade ends, instead of being dropped.
+- **Play now during a crossfade**: kept in `pendingCue` and played as soon as the crossfade ends, instead of being dropped.
 
 ## Auto DJ
 
@@ -222,7 +222,7 @@ In Auto mix, the incoming deck then eases back to 100% over 8 seconds once the f
 - The crossfader sets both deck faders with an equal-power curve (`crossfaderGains`). It ramps with `setTargetAtTime`, so dragging doesn't click.
 - The **live deck** is the crossfader's side, unless only the other deck is playing. `updateLiveDeck` keeps `activeDeck`, `booth.currentIndex`, and `booth.playing` in step, so the stage, the phone, and voice all follow it.
 - **Auto fade** starts the far deck (on beat when possible) and moves the crossfader on a 40 ms timer. When it finishes, it pauses the deck that faded out.
-- Play, Next, Cue, Play now, and voice requests are routed through `manualToggle` and `manualPlay`. Those load the free deck (file or YouTube) and auto fade. Prev restarts the live deck.
+- Play, Next, Play now, and voice requests are routed through `manualToggle` and `manualPlay`. Those load the free deck (file or YouTube) and auto fade. Prev restarts the live deck.
 - **Safety net:** with Auto DJ on, if the live deck is about to end and the other deck is idle, the booth runs `manualPlay` on the next song.
 - Switching back to Auto mix keeps the live deck and stops the other. Switching is refused during a crossfade.
 

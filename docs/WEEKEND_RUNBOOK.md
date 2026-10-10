@@ -24,8 +24,8 @@ http://localhost:4242
 8. Search and download any extra open-audio tracks you want ready.
 9. Press Play once on the Mac to unlock browser audio.
 10. Scan the QR code with your phone.
-11. Press **Sound check** under the QR code and fix anything that isn't green. Press **Keep awake** there so the Mac doesn't sleep.
 11. If you plan to use YouTube, check the terminal says `YouTube search: on`. Queue the YouTube songs you already know you want.
+12. Press **Sound check** under the QR code and fix anything that isn't green. Press **Keep awake** there so the Mac doesn't sleep.
 
 ## Sound Check
 
@@ -62,7 +62,7 @@ Start around energy 40-55. Move toward 75-90 when people are dancing.
 
 Use Auto DJ when the room is moving well. It plays every track once before repeating, so load enough music to cover the night.
 
-Use Cue from the phone when a specific song should play right now. It crossfades straight into that song.
+Use **Play now** from the phone when a specific song should play right now. It crossfades straight into that song. Use **Play next** when it should come right after the current song instead.
 
 Leave the booth on Auto mix with Beat match on for most of the night. Pick a Transition style that suits the room: Crossfade or Bass swap while people dance, Echo out or Brake for a dramatic change, Mix it up for variety. Switch to Manual mix when you want to play DJ: load the next song on the free deck with its A or B button, press Sync (two files), and bring it in with the crossfader. Keep Auto DJ flow on, so if you get distracted the booth fades to the next song by itself before the live deck runs out.
 

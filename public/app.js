@@ -1115,8 +1115,6 @@ async function loadTrack(index, shouldPlay, useFade) {
   if (failed && booth.playing && track.unplayable) nextTrack(true);
 }
 
-// Cue and Play now are what someone asked for, so a running crossfade delays them instead of
-// dropping them. Automatic transitions still just skip while a crossfade runs.
 // --- Play next ---------------------------------------------------------------------------------
 
 // Where a track sits in the Up next list (1 = plays next), or 0 when it isn't on it.
@@ -1152,6 +1150,8 @@ function playNextMessage(track, position) {
   return position === 1 ? `${track.title} plays next` : `${track.title} is up next (#${position})`;
 }
 
+// Play now is what someone asked for, so a running crossfade delays it instead of dropping it.
+// Automatic transitions still just skip while a crossfade runs.
 function cueTrack(index, shouldPlay) {
   if (booth.mixMode === "manual") {
     manualPlay(index);
@@ -1960,7 +1960,7 @@ async function manualToggle() {
   updateLiveDeck();
 }
 
-// Next, Cue, and Play now in Manual mix: put the song (file or YouTube) on the deck the room
+// Next and Play now in Manual mix: put the song (file or YouTube) on the deck the room
 // isn't hearing, then fade over to it.
 async function manualPlay(index) {
   const track = booth.tracks[index];
